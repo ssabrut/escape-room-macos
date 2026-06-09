@@ -219,34 +219,5 @@ private struct PartyStatusView: View {
 }
 
 #Preview {
-    // Static preview with the sample API response
-    let sampleRender = RenderWorld(
-        grid: .init(cols: 3, rows: 1),
-        rooms: [
-            .init(id: "room_1", label: "ROOM_1", col: 0, row: 0, isCurrentRoom: true,
-                  connections: ["east"],
-                  objects: [
-                    .init(id: "ancient_trunk", state: "locked", interacted: false, takeable: false, interactable: true),
-                    .init(id: "inscribed_diary", state: "visible", interacted: false, takeable: false, interactable: true)
-                  ]),
-            .init(id: "room_2", label: "ROOM_2", col: 1, row: 0, isCurrentRoom: false,
-                  connections: ["west", "east"],
-                  objects: [
-                    .init(id: "sealed_wooden_door", state: "locked", interacted: false, takeable: false, interactable: true)
-                  ]),
-            .init(id: "room_3", label: "ROOM_3", col: 2, row: 0, isCurrentRoom: false,
-                  connections: ["west"],
-                  objects: [
-                    .init(id: "obsidian_altar", state: "unlocked", interacted: true, takeable: false, interactable: true)
-                  ])
-        ],
-        corridors: [
-            .init(fromRoom: "room_1", toRoom: "room_2", direction: "east"),
-            .init(fromRoom: "room_2", toRoom: "room_3", direction: "east")
-        ],
-        party: .init(currentRoom: "room_1", inventory: [], tick: 0)
-    )
-
     ContentView()
-        .onAppear { /* preview uses static data */ }
 }

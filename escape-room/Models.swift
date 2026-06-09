@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Render models (decoded from /render in the API response)
+// MARK: - Render models
 
 struct RenderWorld: Codable {
     let grid: GridInfo
@@ -11,6 +11,7 @@ struct RenderWorld: Codable {
     struct GridInfo: Codable {
         let cols: Int
         let rows: Int
+        let tileSize: Int?
     }
 
     struct RenderRoom: Codable, Identifiable {
@@ -18,17 +19,36 @@ struct RenderWorld: Codable {
         let label: String
         let col: Int
         let row: Int
+        let widthTiles: Int?
+        let heightTiles: Int?
+        let floorTile: String?
+        let wallTile: String?
         let isCurrentRoom: Bool
-        let connections: [String]
+        let doors: [Door]?
         let objects: [RoomObject]
+
+        // legacy fallback for old API shape
+        let connections: [String]?
+    }
+
+    struct Door: Codable {
+        let direction: String
+        let toRoom: String
+        let tileX: Int
+        let tileY: Int
+        let locked: Bool
     }
 
     struct RoomObject: Codable, Identifiable {
         let id: String
+        let sprite: String?
+        let tileX: Int?
+        let tileY: Int?
         let state: String
         let interacted: Bool
         let takeable: Bool
         let interactable: Bool
+        let scenic: Bool?
     }
 
     struct Corridor: Codable {
