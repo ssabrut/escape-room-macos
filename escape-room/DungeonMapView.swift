@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Layout constants
 
-private let roomTileCount: CGFloat = 10   // default widthTiles / heightTiles
+private let roomTileCount: CGFloat = 50   // default widthTiles / heightTiles
 private let pixelSize:     CGFloat = 16   // one "pixel block" in points
 private let roomSize:      CGFloat = roomTileCount * pixelSize  // 160 pt per room cell
 private let mapPadding:    CGFloat = 32
