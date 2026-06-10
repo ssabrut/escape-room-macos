@@ -3,52 +3,55 @@ import SwiftUI
 // MARK: - Layout constants
 
 private let roomTileCount: CGFloat = 50   // default widthTiles / heightTiles
-private let pixelSize:     CGFloat = 16   // one "pixel block" in points
-private let roomSize:      CGFloat = roomTileCount * pixelSize  // 160 pt per room cell
-private let mapPadding:    CGFloat = 32
-private let corridorWidth: CGFloat = 10
+private let mapPadding:    CGFloat = 16
+private let roomGap:       CGFloat = 4
 
-// MARK: - Dungeon map (scrollable overview)
+// MARK: - Dungeon map (fits entirely on screen, no scrolling)
 
 struct DungeonMapView: View {
     let world: RenderWorld
 
-    private var totalW: CGFloat {
-        let cols = CGFloat(world.grid.cols)
-        return cols * roomSize + mapPadding * 2
-    }
-    private var totalH: CGFloat {
-        let rows = CGFloat(world.grid.rows)
-        return rows * roomSize + mapPadding * 2
-    }
-
     var body: some View {
-        ScrollView([.horizontal, .vertical]) {
+        GeometryReader { geo in
+            let cols = max(CGFloat(world.grid.cols), 1)
+            let rows = max(CGFloat(world.grid.rows), 1)
+
+            let availW = geo.size.width  - mapPadding * 2
+            let availH = geo.size.height - mapPadding * 2
+
+            let roomSize = max(min(availW / cols, availH / rows), 1)
+            let totalW = cols * roomSize
+            let totalH = rows * roomSize
+
+            let originX = (geo.size.width  - totalW) / 2
+            let originY = (geo.size.height - totalH) / 2
+
             ZStack(alignment: .topLeading) {
-                Canvas { ctx, _ in drawCorridors(ctx: ctx) }
-                    .frame(width: totalW, height: totalH)
+                Canvas { ctx, _ in drawCorridors(ctx: ctx, roomSize: roomSize, originX: originX, originY: originY) }
+                    .frame(width: geo.size.width, height: geo.size.height)
 
                 ForEach(world.rooms) { room in
-                    let cx: CGFloat = mapPadding + CGFloat(room.col) * roomSize + roomSize / 2
-                    let cy: CGFloat = mapPadding + CGFloat(room.row) * roomSize + roomSize / 2
+                    let cx: CGFloat = originX + CGFloat(room.col) * roomSize + roomSize / 2
+                    let cy: CGFloat = originY + CGFloat(room.row) * roomSize + roomSize / 2
                     RoomCanvasView(room: room)
-                        .frame(width: roomSize - 4, height: roomSize - 4)
+                        .frame(width: roomSize - roomGap, height: roomSize - roomGap)
                         .position(x: cx, y: cy)
                 }
             }
-            .frame(width: totalW, height: totalH)
+            .frame(width: geo.size.width, height: geo.size.height)
         }
         .background(Color(red: 0.05, green: 0.05, blue: 0.08))
     }
 
-    private func drawCorridors(ctx: GraphicsContext) {
+    private func drawCorridors(ctx: GraphicsContext, roomSize: CGFloat, originX: CGFloat, originY: CGFloat) {
+        let corridorWidth = max(roomSize * 0.06, 2)
         for corridor in world.corridors {
             guard
                 let from = world.rooms.first(where: { $0.id == corridor.fromRoom }),
                 let to   = world.rooms.first(where: { $0.id == corridor.toRoom })
             else { continue }
-            let p1 = roomCenter(from)
-            let p2 = roomCenter(to)
+            let p1 = roomCenter(from, roomSize: roomSize, originX: originX, originY: originY)
+            let p2 = roomCenter(to, roomSize: roomSize, originX: originX, originY: originY)
             var path = Path()
             path.move(to: p1)
             path.addLine(to: p2)
@@ -56,9 +59,9 @@ struct DungeonMapView: View {
         }
     }
 
-    private func roomCenter(_ room: RenderWorld.RenderRoom) -> CGPoint {
-        let x: CGFloat = mapPadding + CGFloat(room.col) * roomSize + roomSize / 2
-        let y: CGFloat = mapPadding + CGFloat(room.row) * roomSize + roomSize / 2
+    private func roomCenter(_ room: RenderWorld.RenderRoom, roomSize: CGFloat, originX: CGFloat, originY: CGFloat) -> CGPoint {
+        let x: CGFloat = originX + CGFloat(room.col) * roomSize + roomSize / 2
+        let y: CGFloat = originY + CGFloat(room.row) * roomSize + roomSize / 2
         return CGPoint(x: x, y: y)
     }
 }
@@ -70,11 +73,11 @@ private struct RoomCanvasView: View {
 
     var body: some View {
         Canvas { ctx, size in
-            let p = pixelSize
             let tilesW = CGFloat(room.widthTiles  ?? Int(roomTileCount))
             let tilesH = CGFloat(room.heightTiles ?? Int(roomTileCount))
             let scaleX = size.width  / tilesW
             let scaleY = size.height / tilesH
+            let p = min(scaleX, scaleY)
 
             drawFloor(ctx: ctx, size: size, p: p)
             drawWalls(ctx: ctx, size: size, p: p)
@@ -169,6 +172,10 @@ private struct RoomCanvasView: View {
 
     private func drawObjects(ctx: GraphicsContext, scaleX: CGFloat, scaleY: CGFloat, p: CGFloat) {
         for obj in room.objects {
+            // Doors are already drawn as thick colored lines in drawDoors.
+            if (obj.sprite ?? "").lowercased() == "door" || obj.id.lowercased().contains("door") {
+                continue
+            }
             guard let tx = obj.tileX, let ty = obj.tileY else { continue }
             let cx = CGFloat(tx) * scaleX + scaleX / 2
             let cy = CGFloat(ty) * scaleY + scaleY / 2
