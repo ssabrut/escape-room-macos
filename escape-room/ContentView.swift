@@ -87,12 +87,19 @@ private enum StartMode {
     case generate, loadJSON
 }
 
+// MARK: - App screen
+
+private enum AppScreen {
+    case mainMenu, start
+}
+
 // MARK: - Root view
 
 struct ContentView: View {
     @StateObject private var vm = EscapeRoomViewModel()
     @State private var selectedTheme = themes[0]
     @State private var startMode: StartMode = .generate
+    @State private var screen: AppScreen = .mainMenu
 
     var body: some View {
         NavigationStack {
@@ -127,6 +134,17 @@ struct ContentView: View {
                         Button("Back") { vm.errorMessage = nil }
                             .font(.system(size: 14, design: .monospaced))
                     }
+                } else if screen == .mainMenu {
+                    MainMenuView(
+                        onNewGame: {
+                            startMode = .generate
+                            screen = .start
+                        },
+                        onLoadGame: {
+                            startMode = .loadJSON
+                            screen = .start
+                        }
+                    )
                 } else {
                     StartView(
                         startMode: $startMode,
@@ -136,6 +154,9 @@ struct ContentView: View {
                         },
                         onLoadJSON: { json in
                             vm.loadFromJSON(json)
+                        },
+                        onBack: {
+                            screen = .mainMenu
                         }
                     )
                 }
@@ -159,16 +180,29 @@ private struct StartView: View {
     @Binding var selectedTheme: String
     let onGenerate: () -> Void
     let onLoadJSON: (String) -> Void
+    let onBack: () -> Void
 
     @State private var jsonText = ""
 
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
+                HStack {
+                    Button(action: onBack) {
+                        Label("BACK", systemImage: "chevron.left")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundColor(.green)
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
+
                 Text("ESCAPE ROOM")
                     .font(.system(size: 28, weight: .black, design: .monospaced))
                     .foregroundColor(.green)
-                    .padding(.top, 32)
 
                 // Mode toggle
                 HStack(spacing: 0) {
