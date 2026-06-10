@@ -108,20 +108,7 @@ struct ContentView: View {
                     ProgressView("Generating world…")
                         .font(.system(size: 14, design: .monospaced))
                 } else if let world = vm.world {
-                    VStack(spacing: 0) {
-                        DungeonMapView(world: world)
-                            .background(Color(white: 0.08))
-
-                        Divider()
-
-                        MapLegendView()
-                            .padding(.vertical, 8)
-                            .background(Color(white: 0.1))
-
-                        PartyStatusView(party: world.party)
-                            .padding(.horizontal)
-                            .padding(.bottom, 8)
-                    }
+                    GameView(world: world)
                 } else if let error = vm.errorMessage {
                     VStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle")
@@ -170,6 +157,101 @@ struct ContentView: View {
             .background(Color(white: 0.08).ignoresSafeArea())
         }
         .preferredColorScheme(.dark)
+    }
+}
+
+// MARK: - Game view (map / agent conversation / objective grid)
+
+private struct GameView: View {
+    let world: RenderWorld
+
+    var body: some View {
+        GeometryReader { geo in
+            let isWide = geo.size.width > geo.size.height
+
+            VStack(spacing: 1) {
+                if isWide {
+                    HStack(spacing: 1) {
+                        DungeonMapView(world: world)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        AgentConversationView()
+                            .frame(width: min(geo.size.width * 0.32, 360))
+                    }
+                } else {
+                    VStack(spacing: 1) {
+                        DungeonMapView(world: world)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        AgentConversationView()
+                            .frame(height: min(geo.size.height * 0.32, 280))
+                    }
+                }
+
+                ObjectiveBarView(world: world)
+            }
+            .background(Color(white: 0.2))
+        }
+    }
+}
+
+// MARK: - Agent conversation panel
+
+private struct AgentConversationView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("AGENT CONVERSATION")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundColor(Color(white: 0.5))
+                .padding(.horizontal, 12)
+                .padding(.top, 12)
+
+            Divider().background(Color(white: 0.2))
+
+            VStack {
+                Spacer()
+                Text("No messages yet.")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(Color(white: 0.4))
+                Spacer()
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 12)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(white: 0.1))
+    }
+}
+
+// MARK: - Objective bar
+
+private struct ObjectiveBarView: View {
+    let world: RenderWorld
+
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Text("OBJECTIVE")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundColor(Color(white: 0.5))
+
+                Text("Explore the rooms and find a way out.")
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundColor(.green)
+
+                Spacer()
+            }
+
+            Divider().background(Color(white: 0.2))
+
+            MapLegendView()
+
+            PartyStatusView(party: world.party)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color(white: 0.1))
     }
 }
 
