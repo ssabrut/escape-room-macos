@@ -185,143 +185,137 @@ private struct StartView: View {
     @State private var jsonText = ""
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                HStack {
-                    Button(action: onBack) {
-                        Label("BACK", systemImage: "chevron.left")
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .foregroundColor(.green)
+        ZStack {
+            SkyBackground()
+                .ignoresSafeArea()
+
+            ScrollView {
+                VStack(spacing: 20) {
+                    HStack {
+                        Button(action: onBack) {
+                            Label("BACK", systemImage: "chevron.left")
+                                .font(.system(size: 14, weight: .heavy, design: .rounded))
+                                .foregroundColor(WoodTheme.title)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(
+                                    Capsule()
+                                        .fill(WoodTheme.frame)
+                                        .overlay(Capsule().strokeBorder(WoodTheme.frameDark, lineWidth: 3))
+                                )
+                        }
+                        .buttonStyle(.plain)
+
+                        Spacer()
                     }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 16)
 
-                    Spacer()
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 16)
+                    WoodSignTitle(title: "ESCAPE ROOM", fontSize: 26, aspectRatio: 4.0)
+                        .frame(maxWidth: 420)
+                        .padding(.horizontal, 24)
 
-                Text("ESCAPE ROOM")
-                    .font(.system(size: 28, weight: .black, design: .monospaced))
-                    .foregroundColor(.green)
-
-                // Mode toggle
-                HStack(spacing: 0) {
-                    ModeTab(title: "GENERATE", selected: startMode == .generate) {
-                        startMode = .generate
+                    // Mode toggle
+                    HStack(spacing: 0) {
+                        ModeTab(title: "GENERATE", selected: startMode == .generate) {
+                            startMode = .generate
+                        }
+                        ModeTab(title: "LOAD JSON", selected: startMode == .loadJSON) {
+                            startMode = .loadJSON
+                        }
                     }
-                    ModeTab(title: "LOAD JSON", selected: startMode == .loadJSON) {
-                        startMode = .loadJSON
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.25), lineWidth: 1))
-                .padding(.horizontal, 24)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(WoodTheme.frame, lineWidth: 3))
+                    .padding(.horizontal, 24)
 
-                if startMode == .generate {
-                    // Theme list
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("CHOOSE THEME")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundColor(Color(white: 0.5))
+                    if startMode == .generate {
+                        // Theme list
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("CHOOSE THEME")
+                                .font(.system(size: 12, weight: .heavy, design: .rounded))
+                                .foregroundColor(WoodTheme.frameDark)
 
-                        VStack(spacing: 0) {
-                            ForEach(themes, id: \.self) { theme in
-                                Button {
-                                    selectedTheme = theme
-                                } label: {
-                                    HStack {
-                                        Text(theme)
-                                            .font(.system(size: 14, design: .monospaced))
-                                            .foregroundColor(selectedTheme == theme ? .black : .green)
-                                        Spacer()
-                                        if selectedTheme == theme {
-                                            Image(systemName: "checkmark")
-                                                .font(.system(size: 12, weight: .bold))
-                                                .foregroundColor(.black)
+                            VStack(spacing: 0) {
+                                ForEach(themes, id: \.self) { theme in
+                                    Button {
+                                        selectedTheme = theme
+                                    } label: {
+                                        HStack {
+                                            Text(theme)
+                                                .font(.system(size: 15, weight: .medium, design: .rounded))
+                                                .foregroundColor(selectedTheme == theme ? WoodTheme.parchment : WoodTheme.frameDark)
+                                            Spacer()
+                                            if selectedTheme == theme {
+                                                Image(systemName: "checkmark")
+                                                    .font(.system(size: 12, weight: .bold))
+                                                    .foregroundColor(WoodTheme.parchment)
+                                            }
                                         }
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 12)
+                                        .background(selectedTheme == theme ? WoodTheme.frame : WoodTheme.parchment)
                                     }
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 10)
-                                    .background(selectedTheme == theme ? Color.green : Color(white: 0.12))
-                                }
-                                .buttonStyle(.plain)
+                                    .buttonStyle(.plain)
 
-                                if theme != themes.last {
-                                    Divider().background(Color(white: 0.2))
+                                    if theme != themes.last {
+                                        Divider().background(WoodTheme.frame.opacity(0.4))
+                                    }
                                 }
                             }
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(WoodTheme.frame, lineWidth: 3))
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.25), lineWidth: 1))
-                    }
-                    .padding(.horizontal, 24)
+                        .padding(.horizontal, 24)
 
-                    Button(action: onGenerate) {
-                        Text("GENERATE WORLD")
-                            .font(.system(size: 16, weight: .bold, design: .monospaced))
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.green)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 24)
+                        WoodButton(label: "GENERATE WORLD", systemImage: "wand.and.stars", iconColor: WoodTheme.leaf, action: onGenerate)
+                            .padding(.horizontal, 24)
 
-                } else {
-                    // JSON paste area
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("PASTE WORLD JSON")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundColor(Color(white: 0.5))
+                    } else {
+                        // JSON paste area
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("PASTE WORLD JSON")
+                                .font(.system(size: 12, weight: .heavy, design: .rounded))
+                                .foregroundColor(WoodTheme.frameDark)
 
-                        TextEditor(text: $jsonText)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(.green)
-                            .scrollContentBackground(.hidden)
-                            .background(Color(white: 0.07))
-                            .frame(minHeight: 200)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.25), lineWidth: 1))
+                            TextEditor(text: $jsonText)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(WoodTheme.frameDark)
+                                .scrollContentBackground(.hidden)
+                                .background(WoodTheme.parchment)
+                                .frame(minHeight: 200)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(WoodTheme.frame, lineWidth: 3))
 
-                        Text("Paste the full API response JSON (must contain a \"render\" key).")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(Color(white: 0.4))
-                    }
-                    .padding(.horizontal, 24)
-
-                    HStack(spacing: 12) {
-                        Button {
-                            jsonText = ""
-                        } label: {
-                            Text("CLEAR")
-                                .font(.system(size: 14, weight: .bold, design: .monospaced))
-                                .foregroundColor(Color(white: 0.6))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(Color(white: 0.15))
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                            Text("Paste the full API response JSON (must contain a \"render\" key).")
+                                .font(.system(size: 11, design: .rounded))
+                                .foregroundColor(WoodTheme.frameDark.opacity(0.8))
                         }
-                        .buttonStyle(.plain)
+                        .padding(.horizontal, 24)
 
-                        Button {
-                            onLoadJSON(jsonText)
-                        } label: {
-                            Text("LOAD WORLD")
-                                .font(.system(size: 14, weight: .bold, design: .monospaced))
-                                .foregroundColor(.black)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(jsonText.isEmpty ? Color.green.opacity(0.4) : Color.green)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        HStack(spacing: 12) {
+                            Button {
+                                jsonText = ""
+                            } label: {
+                                Text("CLEAR")
+                                    .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                    .foregroundColor(WoodTheme.title)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 10)
+                                            .fill(WoodTheme.frame)
+                                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(WoodTheme.frameDark, lineWidth: 3))
+                                    )
+                            }
+                            .buttonStyle(.plain)
+
+                            WoodButton(label: "LOAD WORLD", systemImage: "scroll.fill", iconColor: .pink, action: { onLoadJSON(jsonText) }, isEnabled: !jsonText.isEmpty)
                         }
-                        .buttonStyle(.plain)
-                        .disabled(jsonText.isEmpty)
+                        .padding(.horizontal, 24)
                     }
-                    .padding(.horizontal, 24)
+
+                    Spacer(minLength: 32)
                 }
-
-                Spacer(minLength: 32)
             }
         }
     }
@@ -337,11 +331,11 @@ private struct ModeTab: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 13, weight: .bold, design: .monospaced))
-                .foregroundColor(selected ? .black : Color(white: 0.5))
+                .font(.system(size: 14, weight: .heavy, design: .rounded))
+                .foregroundColor(selected ? WoodTheme.parchment : WoodTheme.frameDark)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-                .background(selected ? Color.green : Color(white: 0.12))
+                .padding(.vertical, 12)
+                .background(selected ? WoodTheme.frame : WoodTheme.parchment)
         }
         .buttonStyle(.plain)
     }

@@ -35,9 +35,22 @@ struct MainMenuView: View {
     }
 }
 
+// MARK: - Theme palette
+
+enum WoodTheme {
+    static let plankLight = Color(red: 0.72, green: 0.47, blue: 0.24)
+    static let plankDark = Color(red: 0.45, green: 0.27, blue: 0.12)
+    static let frame = Color(red: 0.55, green: 0.33, blue: 0.16)
+    static let frameDark = Color(red: 0.36, green: 0.20, blue: 0.09)
+    static let parchment = Color(red: 0.91, green: 0.80, blue: 0.58)
+    static let ink = Color(red: 0.55, green: 0.20, blue: 0.18)
+    static let title = Color(red: 0.93, green: 0.82, blue: 0.58)
+    static let leaf = Color(red: 0.40, green: 0.70, blue: 0.30)
+}
+
 // MARK: - Sky background
 
-private struct SkyBackground: View {
+struct SkyBackground: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
@@ -92,17 +105,19 @@ private struct CloudShape: Shape {
 
 // MARK: - Wood sign title
 
-private struct WoodSignTitle: View {
+struct WoodSignTitle: View {
     let title: String
+    var fontSize: CGFloat = 40
+    var aspectRatio: CGFloat = 2.1
 
     var body: some View {
         ZStack {
             // Outer rope-tied frame
             RoundedRectangle(cornerRadius: 18)
-                .fill(Color(red: 0.55, green: 0.33, blue: 0.16))
+                .fill(WoodTheme.frame)
                 .overlay(
                     RoundedRectangle(cornerRadius: 18)
-                        .strokeBorder(Color(red: 0.36, green: 0.20, blue: 0.09), lineWidth: 6)
+                        .strokeBorder(WoodTheme.frameDark, lineWidth: 6)
                 )
                 .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 6)
 
@@ -110,10 +125,10 @@ private struct WoodSignTitle: View {
             VStack(spacing: 4) {
                 ForEach(0..<4, id: \.self) { _ in
                     RoundedRectangle(cornerRadius: 3)
-                        .fill(Color(red: 0.72, green: 0.47, blue: 0.24))
+                        .fill(WoodTheme.plankLight)
                         .overlay(
                             RoundedRectangle(cornerRadius: 3)
-                                .strokeBorder(Color(red: 0.45, green: 0.27, blue: 0.12), lineWidth: 2)
+                                .strokeBorder(WoodTheme.plankDark, lineWidth: 2)
                         )
                         .frame(height: 38)
                 }
@@ -122,11 +137,13 @@ private struct WoodSignTitle: View {
 
             // Title text carved into the wood
             Text(title)
-                .font(.system(size: 40, weight: .black, design: .rounded))
+                .font(.system(size: fontSize, weight: .black, design: .rounded))
                 .multilineTextAlignment(.center)
-                .foregroundColor(Color(red: 0.93, green: 0.82, blue: 0.58))
+                .foregroundColor(WoodTheme.title)
                 .shadow(color: Color(red: 0.30, green: 0.15, blue: 0.05), radius: 0, x: 2, y: 2)
                 .padding(.horizontal, 12)
+                .minimumScaleFactor(0.5)
+                .lineLimit(2)
 
             // Corner leaf decorations
             VStack {
@@ -144,23 +161,24 @@ private struct WoodSignTitle: View {
             }
             .padding(10)
         }
-        .aspectRatio(2.1, contentMode: .fit)
+        .aspectRatio(aspectRatio, contentMode: .fit)
     }
 
     private var leafIcon: some View {
         Image(systemName: "leaf.fill")
             .font(.system(size: 18))
-            .foregroundColor(Color(red: 0.40, green: 0.70, blue: 0.30))
+            .foregroundColor(WoodTheme.leaf)
     }
 }
 
 // MARK: - Wood button
 
-private struct WoodButton: View {
+struct WoodButton: View {
     let label: String
     let systemImage: String
     let iconColor: Color
     let action: () -> Void
+    var isEnabled: Bool = true
 
     @State private var isPressed = false
 
@@ -173,23 +191,25 @@ private struct WoodButton: View {
 
                 Text(label)
                     .font(.system(size: 20, weight: .heavy, design: .rounded))
-                    .foregroundColor(Color(red: 0.55, green: 0.20, blue: 0.18))
+                    .foregroundColor(WoodTheme.ink)
                     .shadow(color: .white.opacity(0.4), radius: 0, x: 0, y: 1)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 20)
             .background(
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(Color(red: 0.91, green: 0.80, blue: 0.58))
+                    .fill(WoodTheme.parchment)
                     .overlay(
                         RoundedRectangle(cornerRadius: 10)
-                            .strokeBorder(Color(red: 0.55, green: 0.33, blue: 0.16), lineWidth: 5)
+                            .strokeBorder(WoodTheme.frame, lineWidth: 5)
                     )
             )
             .shadow(color: .black.opacity(0.35), radius: 6, x: 0, y: isPressed ? 1 : 4)
             .scaleEffect(isPressed ? 0.97 : 1.0)
+            .opacity(isEnabled ? 1.0 : 0.5)
         }
         .buttonStyle(.plain)
+        .disabled(!isEnabled)
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in isPressed = true }
