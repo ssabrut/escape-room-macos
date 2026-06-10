@@ -22,8 +22,8 @@ final class EscapeRoomViewModel: ObservableObject {
     private let baseURL = URL(string: "http://127.0.0.1:8000")!
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 300
-        config.timeoutIntervalForResource = 300
+        config.timeoutIntervalForRequest = 900
+        config.timeoutIntervalForResource = 900
         return URLSession(configuration: config)
     }()
 
