@@ -18,6 +18,10 @@ final class EscapeRoomViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var progressMessage: String?
+    @Published var startedAt: Date?
+    @Published var spriteETA: TimeInterval?
+
+    private var spriteStageStart: Date?
 
     private static let apiKey = "84beec4c-8d7d-44fa-be4d-15ff630b8fa8"
     private let baseURL = URL(string: "http://127.0.0.1:8000")!
@@ -32,6 +36,9 @@ final class EscapeRoomViewModel: ObservableObject {
         isLoading = true
         errorMessage = nil
         progressMessage = "Starting up…"
+        startedAt = Date()
+        spriteETA = nil
+        spriteStageStart = nil
 
         var request = URLRequest(url: baseURL.appendingPathComponent("generate"))
         request.httpMethod = "POST"
@@ -52,6 +59,7 @@ final class EscapeRoomViewModel: ObservableObject {
                 switch event.type {
                 case "progress":
                     progressMessage = event.message
+                    updateSpriteETA(for: event)
                 case "done":
                     let response = try JSONDecoder().decode(GenerateResponse.self, from: lineData)
                     if let sprites = response.sprites { SpriteCache.shared.load(sprites: sprites) }
@@ -72,7 +80,38 @@ final class EscapeRoomViewModel: ObservableObject {
         }
 
         progressMessage = nil
+        startedAt = nil
+        spriteETA = nil
         isLoading = false
+    }
+
+    /// Estimates remaining time during the "sprites" stage from the average
+    /// time-per-sprite observed so far.
+    private func updateSpriteETA(for event: StreamEvent) {
+        guard event.stage == "sprites",
+              let current = event.current,
+              let total = event.total,
+              total > 0
+        else {
+            spriteETA = nil
+            return
+        }
+
+        let now = Date()
+        if current == 0 {
+            spriteStageStart = now
+            spriteETA = nil
+            return
+        }
+
+        guard let stageStart = spriteStageStart, current < total else {
+            spriteETA = nil
+            return
+        }
+
+        let elapsed = now.timeIntervalSince(stageStart)
+        let perSprite = elapsed / Double(current)
+        spriteETA = perSprite * Double(total - current)
     }
 
     func loadFromJSON(_ jsonString: String) {
@@ -132,21 +171,49 @@ struct ContentView: View {
         NavigationStack {
             Group {
                 if vm.isLoading {
-                    LoadingView(liveMessage: vm.progressMessage)
+                    LoadingView(liveMessage: vm.progressMessage, startedAt: vm.startedAt, eta: vm.spriteETA)
                 } else if let world = vm.world {
                     GameView(world: world)
                 } else if let error = vm.errorMessage {
-                    VStack(spacing: 12) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.largeTitle)
-                            .foregroundColor(.red)
-                        Text(error)
-                            .font(.system(size: 13, design: .monospaced))
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                        Button("Back") { vm.errorMessage = nil }
-                            .font(.system(size: 14, design: .monospaced))
+                    ZStack {
+                        SkyBackground()
+
+                        VStack(spacing: 16) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.largeTitle)
+                                .foregroundColor(Color(red: 0.55, green: 0.18, blue: 0.12))
+
+                            Text(error)
+                                .font(.system(size: 13, design: .monospaced))
+                                .foregroundColor(WoodTheme.frameDark)
+                                .multilineTextAlignment(.center)
+
+                            Button {
+                                vm.errorMessage = nil
+                            } label: {
+                                Text("BACK")
+                                    .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                    .foregroundColor(WoodTheme.title)
+                                    .padding(.horizontal, 24)
+                                    .padding(.vertical, 10)
+                                    .background(
+                                        Capsule()
+                                            .fill(WoodTheme.frame)
+                                            .overlay(Capsule().strokeBorder(WoodTheme.frameDark, lineWidth: 3))
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(20)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(WoodTheme.parchment)
+                                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(WoodTheme.frame, lineWidth: 4))
+                        )
+                        .padding(.horizontal, 32)
+                        .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 6)
                     }
+                    .ignoresSafeArea()
                 } else if screen == .mainMenu {
                     MainMenuView(
                         onNewGame: {
@@ -179,10 +246,10 @@ struct ContentView: View {
             .navigationTitle("Escape Room")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Color(white: 0.08), for: .navigationBar)
+            .toolbarBackground(WoodTheme.frame, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
             #endif
-            .background(Color(white: 0.08).ignoresSafeArea())
+            .background(WoodTheme.frameDark.ignoresSafeArea())
         }
         .preferredColorScheme(.dark)
     }
@@ -201,11 +268,14 @@ private let loadingMessages = [
 
 private struct LoadingView: View {
     var liveMessage: String?
+    var startedAt: Date?
+    var eta: TimeInterval?
 
     @State private var spin = false
     @State private var pulse = false
     @State private var dotCount = 0
     @State private var messageIndex = 0
+    @State private var elapsed: TimeInterval = 0
 
     private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
     private let messageTimer = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
@@ -215,6 +285,22 @@ private struct LoadingView: View {
             return liveMessage
         }
         return loadingMessages[messageIndex] + String(repeating: ".", count: dotCount)
+    }
+
+    private var timingLine: String? {
+        guard startedAt != nil else { return nil }
+        var line = "Elapsed: \(formatDuration(elapsed))"
+        if let eta, eta > 1 {
+            line += "  ·  ~\(formatDuration(eta)) remaining"
+        }
+        return line
+    }
+
+    private func formatDuration(_ interval: TimeInterval) -> String {
+        let total = Int(interval.rounded())
+        let minutes = total / 60
+        let seconds = total % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
 
     var body: some View {
@@ -256,6 +342,12 @@ private struct LoadingView: View {
                         .id(displayMessage)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
+
+                    if let timingLine {
+                        Text(timingLine)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(WoodTheme.parchment.opacity(0.7))
+                    }
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 16)
@@ -275,6 +367,9 @@ private struct LoadingView: View {
         }
         .onReceive(timer) { _ in
             dotCount = (dotCount + 1) % 4
+            if let startedAt {
+                elapsed = Date().timeIntervalSince(startedAt)
+            }
         }
         .onReceive(messageTimer) { _ in
             withAnimation(.easeInOut(duration: 0.4)) {
@@ -314,7 +409,7 @@ private struct GameView: View {
 
                 ObjectiveBarView(world: world)
             }
-            .background(Color(white: 0.2))
+            .background(WoodTheme.frameDark)
         }
     }
 }
@@ -323,28 +418,28 @@ private struct GameView: View {
 
 private struct AgentConversationView: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("AGENT CONVERSATION")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundColor(Color(white: 0.5))
+                .font(.system(size: 11, weight: .heavy, design: .rounded))
+                .foregroundColor(WoodTheme.title)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
-                .padding(.top, 12)
-
-            Divider().background(Color(white: 0.2))
+                .padding(.vertical, 10)
+                .background(WoodTheme.frame)
 
             VStack {
                 Spacer()
                 Text("No messages yet.")
                     .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(Color(white: 0.4))
+                    .foregroundColor(WoodTheme.frameDark.opacity(0.6))
                 Spacer()
             }
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, 12)
             .padding(.bottom, 12)
+            .background(WoodTheme.parchment)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(white: 0.1))
     }
 }
 
@@ -357,17 +452,17 @@ private struct ObjectiveBarView: View {
         VStack(spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
                 Text("OBJECTIVE")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundColor(Color(white: 0.5))
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .foregroundColor(WoodTheme.frameDark)
 
                 Text("Explore the rooms and find a way out.")
                     .font(.system(size: 13, design: .monospaced))
-                    .foregroundColor(.green)
+                    .foregroundColor(Color(red: 0.18, green: 0.42, blue: 0.20))
 
                 Spacer()
             }
 
-            Divider().background(Color(white: 0.2))
+            Divider().background(WoodTheme.frame.opacity(0.4))
 
             MapLegendView()
 
@@ -375,7 +470,8 @@ private struct ObjectiveBarView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color(white: 0.1))
+        .background(WoodTheme.parchment)
+        .overlay(Rectangle().frame(height: 3).foregroundColor(WoodTheme.frame), alignment: .top)
     }
 }
 
@@ -600,25 +696,25 @@ private struct PartyStatusView: View {
         HStack {
             Label(party.currentRoom, systemImage: "location.fill")
                 .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(.green)
+                .foregroundColor(Color(red: 0.18, green: 0.42, blue: 0.20))
 
             Spacer()
 
             if party.inventory.isEmpty {
                 Text("No items")
                     .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(WoodTheme.frameDark.opacity(0.6))
             } else {
                 Label("\(party.inventory.count) item(s)", systemImage: "bag")
                     .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(.yellow)
+                    .foregroundColor(Color(red: 0.62, green: 0.45, blue: 0.10))
             }
 
             Spacer()
 
             Text("Tick \(party.tick)")
                 .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(.secondary)
+                .foregroundColor(WoodTheme.frameDark.opacity(0.6))
         }
     }
 }

@@ -426,7 +426,7 @@ private struct LegendItem: View {
             }
             Text(label)
                 .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(.secondary)
+                .foregroundColor(WoodTheme.frameDark.opacity(0.75))
         }
     }
 }
