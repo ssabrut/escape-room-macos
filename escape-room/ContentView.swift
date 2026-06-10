@@ -41,6 +41,7 @@ final class EscapeRoomViewModel: ObservableObject {
         do {
             let (data, _) = try await session.data(for: request)
             let response = try JSONDecoder().decode(GenerateResponse.self, from: data)
+            if let sprites = response.sprites { SpriteCache.shared.load(sprites: sprites) }
             world = response.render
         } catch {
             errorMessage = error.localizedDescription
@@ -57,6 +58,7 @@ final class EscapeRoomViewModel: ObservableObject {
         }
         do {
             let response = try JSONDecoder().decode(GenerateResponse.self, from: data)
+            if let sprites = response.sprites { SpriteCache.shared.load(sprites: sprites) }
             world = response.render
         } catch {
             errorMessage = "JSON parse error: \(error.localizedDescription)"

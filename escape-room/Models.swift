@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 // MARK: - Render models
 
@@ -68,4 +69,28 @@ struct RenderWorld: Codable {
 
 struct GenerateResponse: Codable {
     let render: RenderWorld
+    let sprites: [String: String]?  // objectId → base64 PNG
+}
+
+// MARK: - Decoded sprite cache
+
+final class SpriteCache {
+    static let shared = SpriteCache()
+    private var images: [String: CGImage] = [:]
+
+    func load(sprites: [String: String]) {
+        images.removeAll()
+        for (id, b64) in sprites {
+            guard
+                let data = Data(base64Encoded: b64),
+                let provider = CGDataProvider(data: data as CFData),
+                let img = CGImage(pngDataProviderSource: provider,
+                                  decode: nil, shouldInterpolate: false,
+                                  intent: .defaultIntent)
+            else { continue }
+            images[id] = img
+        }
+    }
+
+    func image(for id: String) -> CGImage? { images[id] }
 }

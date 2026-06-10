@@ -165,13 +165,23 @@ private struct RoomCanvasView: View {
         }
     }
 
-    // MARK: Objects — placed at tileX/tileY, drawn by sprite type
+    // MARK: Objects — all objects placed at tileX/tileY
 
     private func drawObjects(ctx: GraphicsContext, scaleX: CGFloat, scaleY: CGFloat, p: CGFloat) {
-        for obj in room.objects where !(obj.scenic ?? true) || obj.interactable {
+        for obj in room.objects {
             guard let tx = obj.tileX, let ty = obj.tileY else { continue }
             let cx = CGFloat(tx) * scaleX + scaleX / 2
             let cy = CGFloat(ty) * scaleY + scaleY / 2
+
+            // Try cached sprite image first
+            if let cgImage = SpriteCache.shared.image(for: obj.id) {
+                let size = p * 3
+                let rect = CGRect(x: cx - size / 2, y: cy - size / 2, width: size, height: size)
+                ctx.draw(Image(cgImage, scale: 1, label: Text(obj.id)),
+                         in: rect)
+                continue
+            }
+
             let sprite = obj.sprite ?? "item"
             drawSprite(ctx: ctx, sprite: sprite, state: obj.state,
                        takeable: obj.takeable, cx: cx, cy: cy, p: p)
