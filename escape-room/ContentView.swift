@@ -17,6 +17,7 @@ final class EscapeRoomViewModel: ObservableObject {
     @Published var world: RenderWorld?
     @Published var isLoading = false
     @Published var errorMessage: String?
+    @Published var progressMessage: String?
 
     private static let apiKey = "84beec4c-8d7d-44fa-be4d-15ff630b8fa8"
     private let baseURL = URL(string: "http://127.0.0.1:8000")!
@@ -30,23 +31,47 @@ final class EscapeRoomViewModel: ObservableObject {
     func generate(theme: String = "Haunted House", hardMode: Bool = true, numRooms: Int = 3) async {
         isLoading = true
         errorMessage = nil
+        progressMessage = "Starting up…"
 
         var request = URLRequest(url: baseURL.appendingPathComponent("generate"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
         request.setValue(Self.apiKey, forHTTPHeaderField: "X-API-Key")
         let body: [String: Any] = ["theme": theme, "hard_mode": hardMode, "num_rooms": numRooms]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
-            let (data, _) = try await session.data(for: request)
-            let response = try JSONDecoder().decode(GenerateResponse.self, from: data)
-            if let sprites = response.sprites { SpriteCache.shared.load(sprites: sprites) }
-            world = response.render
+            let (bytes, _) = try await session.bytes(for: request)
+            var sawDone = false
+
+            for try await line in bytes.lines {
+                guard let lineData = line.data(using: .utf8) else { continue }
+                guard let event = try? JSONDecoder().decode(StreamEvent.self, from: lineData) else { continue }
+
+                switch event.type {
+                case "progress":
+                    progressMessage = event.message
+                case "done":
+                    let response = try JSONDecoder().decode(GenerateResponse.self, from: lineData)
+                    if let sprites = response.sprites { SpriteCache.shared.load(sprites: sprites) }
+                    world = response.render
+                    sawDone = true
+                case "error":
+                    errorMessage = event.detail ?? "Unknown error"
+                default:
+                    break
+                }
+            }
+
+            if !sawDone && errorMessage == nil {
+                errorMessage = "Connection closed before world was generated."
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
 
+        progressMessage = nil
         isLoading = false
     }
 
@@ -98,6 +123,8 @@ private enum AppScreen {
 struct ContentView: View {
     @StateObject private var vm = EscapeRoomViewModel()
     @State private var selectedTheme = themes[0]
+    @State private var numRooms = 3
+    @State private var hardMode = true
     @State private var startMode: StartMode = .generate
     @State private var screen: AppScreen = .mainMenu
 
@@ -105,8 +132,7 @@ struct ContentView: View {
         NavigationStack {
             Group {
                 if vm.isLoading {
-                    ProgressView("Generating world…")
-                        .font(.system(size: 14, design: .monospaced))
+                    LoadingView(liveMessage: vm.progressMessage)
                 } else if let world = vm.world {
                     GameView(world: world)
                 } else if let error = vm.errorMessage {
@@ -136,8 +162,10 @@ struct ContentView: View {
                     StartView(
                         startMode: $startMode,
                         selectedTheme: $selectedTheme,
+                        numRooms: $numRooms,
+                        hardMode: $hardMode,
                         onGenerate: {
-                            Task { await vm.generate(theme: selectedTheme, hardMode: true, numRooms: 3) }
+                            Task { await vm.generate(theme: selectedTheme, hardMode: hardMode, numRooms: numRooms) }
                         },
                         onLoadJSON: { json in
                             vm.loadFromJSON(json)
@@ -157,6 +185,102 @@ struct ContentView: View {
             .background(Color(white: 0.08).ignoresSafeArea())
         }
         .preferredColorScheme(.dark)
+    }
+}
+
+// MARK: - Loading view
+
+private let loadingMessages = [
+    "Sketching the rooms…",
+    "Hiding the keys…",
+    "Locking the chests…",
+    "Placing the clues…",
+    "Summoning the agents…",
+    "Polishing the puzzles…",
+]
+
+private struct LoadingView: View {
+    var liveMessage: String?
+
+    @State private var spin = false
+    @State private var pulse = false
+    @State private var dotCount = 0
+    @State private var messageIndex = 0
+
+    private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+    private let messageTimer = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
+
+    private var displayMessage: String {
+        if let liveMessage, !liveMessage.isEmpty {
+            return liveMessage
+        }
+        return loadingMessages[messageIndex] + String(repeating: ".", count: dotCount)
+    }
+
+    var body: some View {
+        ZStack {
+            SkyBackground()
+
+            VStack(spacing: 28) {
+                ZStack {
+                    Circle()
+                        .stroke(WoodTheme.frame, lineWidth: 6)
+                        .frame(width: 96, height: 96)
+                        .opacity(0.5)
+
+                    Circle()
+                        .trim(from: 0, to: 0.25)
+                        .stroke(WoodTheme.title, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                        .frame(width: 96, height: 96)
+                        .rotationEffect(.degrees(spin ? 360 : 0))
+                        .animation(.linear(duration: 1.2).repeatForever(autoreverses: false), value: spin)
+
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 32))
+                        .foregroundColor(WoodTheme.leaf)
+                        .scaleEffect(pulse ? 1.15 : 0.9)
+                        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
+                }
+
+                VStack(spacing: 10) {
+                    Text("GENERATING WORLD")
+                        .font(.system(size: 18, weight: .black, design: .rounded))
+                        .foregroundColor(WoodTheme.title)
+                        .shadow(color: Color(red: 0.30, green: 0.15, blue: 0.05), radius: 0, x: 1, y: 1)
+
+                    Text(displayMessage)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundColor(WoodTheme.parchment)
+                        .frame(height: 18)
+                        .transition(.opacity)
+                        .id(displayMessage)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
+                .frame(minWidth: 260)
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(WoodTheme.frame)
+                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(WoodTheme.frameDark, lineWidth: 4))
+                )
+                .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 6)
+            }
+        }
+        .ignoresSafeArea()
+        .onAppear {
+            spin = true
+            pulse = true
+        }
+        .onReceive(timer) { _ in
+            dotCount = (dotCount + 1) % 4
+        }
+        .onReceive(messageTimer) { _ in
+            withAnimation(.easeInOut(duration: 0.4)) {
+                messageIndex = (messageIndex + 1) % loadingMessages.count
+            }
+        }
     }
 }
 
@@ -260,6 +384,8 @@ private struct ObjectiveBarView: View {
 private struct StartView: View {
     @Binding var startMode: StartMode
     @Binding var selectedTheme: String
+    @Binding var numRooms: Int
+    @Binding var hardMode: Bool
     let onGenerate: () -> Void
     let onLoadJSON: (String) -> Void
     let onBack: () -> Void
@@ -343,6 +469,48 @@ private struct StartView: View {
                                         Divider().background(WoodTheme.frame.opacity(0.4))
                                     }
                                 }
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(WoodTheme.frame, lineWidth: 3))
+                        }
+                        .padding(.horizontal, 24)
+
+                        // World settings
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("WORLD SETTINGS")
+                                .font(.system(size: 12, weight: .heavy, design: .rounded))
+                                .foregroundColor(WoodTheme.frameDark)
+
+                            VStack(spacing: 0) {
+                                Stepper(value: $numRooms, in: 1...10) {
+                                    HStack {
+                                        Text("Rooms")
+                                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                                            .foregroundColor(WoodTheme.frameDark)
+                                        Spacer()
+                                        Text("\(numRooms)")
+                                            .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                            .foregroundColor(WoodTheme.frameDark)
+                                    }
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
+                                .background(WoodTheme.parchment)
+
+                                Divider().background(WoodTheme.frame.opacity(0.4))
+
+                                HStack {
+                                    Text("Hard Mode")
+                                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                                        .foregroundColor(WoodTheme.frameDark)
+                                    Spacer()
+                                    Toggle("", isOn: $hardMode)
+                                        .labelsHidden()
+                                        .tint(WoodTheme.frame)
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
+                                .background(WoodTheme.parchment)
                             }
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(WoodTheme.frame, lineWidth: 3))

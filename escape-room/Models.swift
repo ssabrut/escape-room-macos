@@ -72,6 +72,17 @@ struct GenerateResponse: Codable {
     let sprites: [String: String]?  // objectId → base64 PNG
 }
 
+// MARK: - Streaming progress events
+
+struct StreamEvent: Codable {
+    let type: String
+    let stage: String?
+    let message: String?
+    let current: Int?
+    let total: Int?
+    let detail: String?
+}
+
 // MARK: - Decoded sprite cache
 
 final class SpriteCache {
