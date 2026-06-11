@@ -491,22 +491,38 @@ private struct GameView: View {
     @State private var showResult = false
 
     var body: some View {
-        ZStack {
-            VStack(spacing: 1) {
-                DungeonMapView(world: world)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { geo in
+            let isWide = geo.size.width > geo.size.height
 
-                ObjectiveBarView(world: world)
-            }
-            .background(WoodTheme.frameDark)
+            ZStack {
+                VStack(spacing: 1) {
+                    if isWide {
+                        HStack(spacing: 1) {
+                            DungeonMapView(world: world)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            VNAgentConversationView(ticks: ticks, world: world, isLive: isLive)
-                .ignoresSafeArea(edges: .bottom)
+                            AgentConversationView(ticks: ticks, isLive: isLive)
+                                .frame(width: min(geo.size.width * 0.32, 360))
+                        }
+                    } else {
+                        VStack(spacing: 1) {
+                            DungeonMapView(world: world)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if showResult, let result {
-                GameOverPopupView(result: result) {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        showResult = false
+                            AgentConversationView(ticks: ticks, isLive: isLive)
+                                .frame(height: min(geo.size.height * 0.32, 280))
+                        }
+                    }
+
+                    ObjectiveBarView(world: world)
+                }
+                .background(WoodTheme.frameDark)
+
+                if showResult, let result {
+                    GameOverPopupView(result: result) {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            showResult = false
+                        }
                     }
                 }
             }
@@ -723,9 +739,17 @@ private struct SolverTickBubble: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Tick \(tick.tick) · \(tick.room)")
-                .font(.system(size: 10, weight: .heavy, design: .rounded))
-                .foregroundColor(WoodTheme.frameDark.opacity(0.6))
+            HStack(spacing: 5) {
+                if let agentId = tick.agentId {
+                    Circle()
+                        .fill(agentColor(for: agentId))
+                        .frame(width: 8, height: 8)
+                }
+
+                Text("Tick \(tick.tick) · \(tick.room)")
+                    .font(.system(size: 10, weight: .heavy, design: .rounded))
+                    .foregroundColor(WoodTheme.frameDark.opacity(0.6))
+            }
 
             if let outcome = tick.prevOutcome, let action = outcome.action {
                 let success = outcome.success ?? true
@@ -783,9 +807,11 @@ private struct ObjectiveBarView: View {
 
             Divider().background(WoodTheme.frame.opacity(0.4))
 
-            MapLegendView()
+            let parties = world.parties ?? [world.party]
 
-            PartyStatusView(parties: world.parties ?? [world.party])
+            MapLegendView(agentIds: parties.enumerated().map { $0.element.agentId ?? "agent_\($0.offset + 1)" })
+
+            PartyStatusView(parties: parties)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)

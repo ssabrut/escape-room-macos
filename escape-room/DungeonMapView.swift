@@ -414,13 +414,27 @@ private struct RoomCanvasView: View {
 // MARK: - Legend
 
 struct MapLegendView: View {
+    var agentIds: [String] = ["agent_1"]
+
     var body: some View {
         HStack(spacing: 20) {
             LegendItem(color: Color(red: 0.50, green: 0.18, blue: 0.12), label: "Locked")
             LegendItem(color: Color(red: 0.18, green: 0.48, blue: 0.22), label: "Unlocked")
-            LegendItem(color: .green, label: "You", isCircle: true)
+
+            if agentIds.count == 1 {
+                LegendItem(color: agentColor(for: agentIds[0]), label: "You", isCircle: true)
+            } else {
+                ForEach(agentIds, id: \.self) { agentId in
+                    LegendItem(color: agentColor(for: agentId), label: agentLabel(for: agentId), isCircle: true)
+                }
+            }
         }
         .padding(.horizontal)
+    }
+
+    private func agentLabel(for agentId: String) -> String {
+        let idx = Int(agentId.split(separator: "_").last ?? "1") ?? 1
+        return "Agent \(idx)"
     }
 }
 
