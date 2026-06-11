@@ -260,6 +260,16 @@ struct ContentView: View {
             Group {
                 if let world = vm.world {
                     GameView(world: world, ticks: vm.solverTicks, isLive: vm.isLoading, liveMessage: vm.progressMessage, result: vm.solverResult)
+                        .overlay(alignment: .top) {
+                            if let error = vm.errorMessage {
+                                ErrorBanner(message: error) {
+                                    vm.errorMessage = nil
+                                }
+                                .padding(.top, 8)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                            }
+                        }
+                        .animation(.easeInOut(duration: 0.25), value: vm.errorMessage)
                 } else if vm.isLoading {
                     LoadingView(liveMessage: vm.progressMessage, startedAt: vm.startedAt, eta: vm.spriteETA)
                 } else if let error = vm.errorMessage {
@@ -595,6 +605,45 @@ private struct GameOverPopupView: View {
                 .font(.system(size: 9, weight: .bold, design: .rounded))
                 .foregroundColor(WoodTheme.parchment.opacity(0.7))
         }
+    }
+}
+
+// MARK: - Error banner
+
+/// Surfaces stream/decode errors that happen while a world is already on
+/// screen (e.g. the solve stream drops mid-run) — without this they were
+/// silently swallowed since `GameView` always wins over the error screen.
+private struct ErrorBanner: View {
+    let message: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(Color(red: 0.85, green: 0.25, blue: 0.20))
+
+            Text(message)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(WoodTheme.title)
+                .lineLimit(3)
+
+            Spacer(minLength: 8)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(WoodTheme.parchment.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(WoodTheme.frame)
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(WoodTheme.frameDark, lineWidth: 3))
+        )
+        .shadow(color: .black.opacity(0.35), radius: 6, x: 0, y: 4)
+        .padding(.horizontal, 16)
     }
 }
 
