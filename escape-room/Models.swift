@@ -73,6 +73,19 @@ struct GenerateResponse: Codable {
     let solver: SolverLog?
 }
 
+// MARK: - /generate/solve response (live-solve a loaded world)
+
+struct SolveResponse: Codable {
+    let render: RenderWorld
+    let solutionPath: [String]
+    let solver: SolverLog?
+
+    enum CodingKeys: String, CodingKey {
+        case render, solver
+        case solutionPath = "solution_path"
+    }
+}
+
 // MARK: - Solver result
 
 struct SolverLog: Codable {

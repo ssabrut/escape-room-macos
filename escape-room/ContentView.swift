@@ -130,19 +130,91 @@ final class EscapeRoomViewModel: ObservableObject {
         spriteETA = perSprite * Double(total - current)
     }
 
-    func loadFromJSON(_ jsonString: String) {
+    func loadFromJSON(_ jsonString: String) async {
         errorMessage = nil
+        solverTicks = []
+        solverResult = nil
+
         guard let data = jsonString.data(using: .utf8) else {
             errorMessage = "Invalid text encoding."
             return
         }
+
+        let worldDict: Any?
         do {
             let response = try JSONDecoder().decode(GenerateResponse.self, from: data)
             if let sprites = response.sprites { SpriteCache.shared.load(sprites: sprites) }
             world = response.render
+            solverResult = response.solver
+
+            let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            worldDict = raw?["world"]
         } catch {
             errorMessage = "JSON parse error: \(error.localizedDescription)"
+            return
         }
+
+        guard let worldDict, JSONSerialization.isValidJSONObject(worldDict) else {
+            return
+        }
+
+        await solveLoadedWorld(worldDict)
+    }
+
+    /// Streams the solver's live ticks for an already-built world (loaded
+    /// from JSON), reusing the same NDJSON event shapes as `/generate`.
+    private func solveLoadedWorld(_ worldDict: Any) async {
+        isLoading = true
+        progressMessage = "Starting up…"
+        startedAt = Date()
+
+        var request = URLRequest(url: baseURL.appendingPathComponent("generate/solve"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
+        request.setValue(Self.apiKey, forHTTPHeaderField: "X-API-Key")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["world": worldDict])
+
+        do {
+            let (bytes, _) = try await session.bytes(for: request)
+            var sawDone = false
+
+            for try await line in bytes.lines {
+                guard let lineData = line.data(using: .utf8) else { continue }
+                guard let event = try? JSONDecoder().decode(StreamEvent.self, from: lineData) else { continue }
+
+                switch event.type {
+                case "progress":
+                    progressMessage = event.message
+                case "tick":
+                    if let tickEvent = try? JSONDecoder().decode(SolverTickEvent.self, from: lineData) {
+                        solverTicks.append(tickEvent)
+                        if let render = tickEvent.render {
+                            world = render
+                        }
+                    }
+                case "done":
+                    let response = try JSONDecoder().decode(SolveResponse.self, from: lineData)
+                    world = response.render
+                    solverResult = response.solver
+                    sawDone = true
+                case "error":
+                    errorMessage = event.detail ?? "Unknown error"
+                default:
+                    break
+                }
+            }
+
+            if !sawDone && errorMessage == nil {
+                errorMessage = "Connection closed before the solver finished."
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        progressMessage = nil
+        startedAt = nil
+        isLoading = false
     }
 }
 
@@ -251,7 +323,7 @@ struct ContentView: View {
                             Task { await vm.generate(theme: selectedTheme, hardMode: hardMode, numRooms: numRooms) }
                         },
                         onLoadJSON: { json in
-                            vm.loadFromJSON(json)
+                            Task { await vm.loadFromJSON(json) }
                         },
                         onBack: {
                             screen = .mainMenu
@@ -528,6 +600,10 @@ private struct GameOverPopupView: View {
 
 // MARK: - Agent conversation panel
 
+/// Mirrors `MAX_TICKS` in `src/escape_rooms/nodes/gameplay.py` — the solver
+/// gives up after this many ticks, so it's the denominator for progress.
+private let solverMaxTicks = 40
+
 private struct AgentConversationView: View {
     let ticks: [SolverTickEvent]
     var isLive: Bool = false
@@ -555,6 +631,12 @@ private struct AgentConversationView: View {
                 }
 
                 Spacer()
+
+                if isLive, let lastTick = ticks.last?.tick {
+                    Text("TICK \(lastTick)/\(solverMaxTicks)")
+                        .font(.system(size: 10, weight: .heavy, design: .rounded))
+                        .foregroundColor(WoodTheme.title.opacity(0.8))
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
