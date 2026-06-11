@@ -34,7 +34,7 @@ final class EscapeRoomViewModel: ObservableObject {
         return URLSession(configuration: config)
     }()
 
-    func generate(theme: String = "Haunted House", hardMode: Bool = true, numRooms: Int = 3) async {
+    func generate(theme: String = "Haunted House", hardMode: Bool = true, numRooms: Int = 3, numAgents: Int = 1) async {
         isLoading = true
         errorMessage = nil
         progressMessage = "Starting up…"
@@ -49,7 +49,7 @@ final class EscapeRoomViewModel: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
         request.setValue(Self.apiKey, forHTTPHeaderField: "X-API-Key")
-        let body: [String: Any] = ["theme": theme, "hard_mode": hardMode, "num_rooms": numRooms, "solve": true]
+        let body: [String: Any] = ["theme": theme, "hard_mode": hardMode, "num_rooms": numRooms, "num_agents": numAgents, "solve": true]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
@@ -130,7 +130,7 @@ final class EscapeRoomViewModel: ObservableObject {
         spriteETA = perSprite * Double(total - current)
     }
 
-    func loadFromJSON(_ jsonString: String) async {
+    func loadFromJSON(_ jsonString: String, numAgents: Int = 1) async {
         errorMessage = nil
         solverTicks = []
         solverResult = nil
@@ -158,12 +158,12 @@ final class EscapeRoomViewModel: ObservableObject {
             return
         }
 
-        await solveLoadedWorld(worldDict)
+        await solveLoadedWorld(worldDict, numAgents: numAgents)
     }
 
     /// Streams the solver's live ticks for an already-built world (loaded
     /// from JSON), reusing the same NDJSON event shapes as `/generate`.
-    private func solveLoadedWorld(_ worldDict: Any) async {
+    private func solveLoadedWorld(_ worldDict: Any, numAgents: Int = 1) async {
         isLoading = true
         progressMessage = "Starting up…"
         startedAt = Date()
@@ -173,7 +173,7 @@ final class EscapeRoomViewModel: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
         request.setValue(Self.apiKey, forHTTPHeaderField: "X-API-Key")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["world": worldDict])
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["world": worldDict, "num_agents": numAgents])
 
         do {
             let (bytes, _) = try await session.bytes(for: request)
@@ -252,6 +252,7 @@ struct ContentView: View {
     @State private var selectedTheme = themes[0]
     @State private var numRooms = 3
     @State private var hardMode = true
+    @State private var numAgents = 1
     @State private var startMode: StartMode = .generate
     @State private var screen: AppScreen = .mainMenu
 
@@ -329,11 +330,12 @@ struct ContentView: View {
                         selectedTheme: $selectedTheme,
                         numRooms: $numRooms,
                         hardMode: $hardMode,
+                        numAgents: $numAgents,
                         onGenerate: {
-                            Task { await vm.generate(theme: selectedTheme, hardMode: hardMode, numRooms: numRooms) }
+                            Task { await vm.generate(theme: selectedTheme, hardMode: hardMode, numRooms: numRooms, numAgents: numAgents) }
                         },
                         onLoadJSON: { json in
-                            Task { await vm.loadFromJSON(json) }
+                            Task { await vm.loadFromJSON(json, numAgents: numAgents) }
                         },
                         onBack: {
                             screen = .mainMenu
@@ -489,38 +491,22 @@ private struct GameView: View {
     @State private var showResult = false
 
     var body: some View {
-        GeometryReader { geo in
-            let isWide = geo.size.width > geo.size.height
+        ZStack {
+            VStack(spacing: 1) {
+                DungeonMapView(world: world)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            ZStack {
-                VStack(spacing: 1) {
-                    if isWide {
-                        HStack(spacing: 1) {
-                            DungeonMapView(world: world)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ObjectiveBarView(world: world)
+            }
+            .background(WoodTheme.frameDark)
 
-                            AgentConversationView(ticks: ticks, isLive: isLive)
-                                .frame(width: min(geo.size.width * 0.32, 360))
-                        }
-                    } else {
-                        VStack(spacing: 1) {
-                            DungeonMapView(world: world)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VNAgentConversationView(ticks: ticks, world: world, isLive: isLive)
+                .ignoresSafeArea(edges: .bottom)
 
-                            AgentConversationView(ticks: ticks, isLive: isLive)
-                                .frame(height: min(geo.size.height * 0.32, 280))
-                        }
-                    }
-
-                    ObjectiveBarView(world: world)
-                }
-                .background(WoodTheme.frameDark)
-
-                if showResult, let result {
-                    GameOverPopupView(result: result) {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            showResult = false
-                        }
+            if showResult, let result {
+                GameOverPopupView(result: result) {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        showResult = false
                     }
                 }
             }
@@ -799,7 +785,7 @@ private struct ObjectiveBarView: View {
 
             MapLegendView()
 
-            PartyStatusView(party: world.party)
+            PartyStatusView(parties: world.parties ?? [world.party])
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -815,6 +801,7 @@ private struct StartView: View {
     @Binding var selectedTheme: String
     @Binding var numRooms: Int
     @Binding var hardMode: Bool
+    @Binding var numAgents: Int
     let onGenerate: () -> Void
     let onLoadJSON: (String) -> Void
     let onBack: () -> Void
@@ -940,6 +927,23 @@ private struct StartView: View {
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 12)
                                 .background(WoodTheme.parchment)
+
+                                Divider().background(WoodTheme.frame.opacity(0.4))
+
+                                Stepper(value: $numAgents, in: 1...4) {
+                                    HStack {
+                                        Text("Agents")
+                                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                                            .foregroundColor(WoodTheme.frameDark)
+                                        Spacer()
+                                        Text("\(numAgents)")
+                                            .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                            .foregroundColor(WoodTheme.frameDark)
+                                    }
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
+                                .background(WoodTheme.parchment)
                             }
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(WoodTheme.frame, lineWidth: 3))
@@ -1023,31 +1027,38 @@ private struct ModeTab: View {
 // MARK: - Party status bar
 
 private struct PartyStatusView: View {
-    let party: RenderWorld.Party
+    let parties: [RenderWorld.Party]
 
     var body: some View {
-        HStack {
-            Label(party.currentRoom, systemImage: "location.fill")
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(Color(red: 0.18, green: 0.42, blue: 0.20))
+        VStack(spacing: 4) {
+            ForEach(parties.indices, id: \.self) { i in
+                let party = parties[i]
+                HStack {
+                    Label(party.currentRoom, systemImage: "location.fill")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(agentColor(for: party.agentId ?? "agent_1"))
 
-            Spacer()
+                    Spacer()
 
-            if party.inventory.isEmpty {
-                Text("No items")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(WoodTheme.frameDark.opacity(0.6))
-            } else {
-                Label("\(party.inventory.count) item(s)", systemImage: "bag")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(Color(red: 0.62, green: 0.45, blue: 0.10))
+                    if party.inventory.isEmpty {
+                        Text("No items")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(WoodTheme.frameDark.opacity(0.6))
+                    } else {
+                        Label("\(party.inventory.count) item(s)", systemImage: "bag")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(Color(red: 0.62, green: 0.45, blue: 0.10))
+                    }
+
+                    Spacer()
+
+                    if i == 0 {
+                        Text("Tick \(party.tick)")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(WoodTheme.frameDark.opacity(0.6))
+                    }
+                }
             }
-
-            Spacer()
-
-            Text("Tick \(party.tick)")
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(WoodTheme.frameDark.opacity(0.6))
         }
     }
 }

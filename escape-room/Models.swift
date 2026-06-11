@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import SwiftUI
 
 // MARK: - Render models
 
@@ -7,7 +8,8 @@ struct RenderWorld: Codable {
     let grid: GridInfo
     let rooms: [RenderRoom]
     let corridors: [Corridor]
-    let party: Party
+    let party: Party             // kept for back-compat (agent_1 / first agent view)
+    let parties: [Party]?
 
     struct GridInfo: Codable {
         let cols: Int
@@ -25,6 +27,7 @@ struct RenderWorld: Codable {
         let floorTile: String?
         let wallTile: String?
         let isCurrentRoom: Bool
+        let agentsHere: [String]?
         let doors: [Door]?
         let objects: [RoomObject]
 
@@ -59,6 +62,7 @@ struct RenderWorld: Codable {
     }
 
     struct Party: Codable {
+        let agentId: String?
         let currentRoom: String
         let inventory: [String]
         let tick: Int
@@ -112,10 +116,11 @@ struct StreamEvent: Codable {
 // MARK: - Streaming solver tick events
 
 struct SolverTickEvent: Codable, Identifiable {
-    var id: Int { tick }
+    var id: String { "\(tick)-\(agentId ?? "agent_1")" }
 
     let type: String  // "tick"
     let tick: Int
+    let agentId: String?
     let room: String
     let thought: String?
     let plan: String?
@@ -135,6 +140,7 @@ struct SolverTickEvent: Codable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case type, tick, room, thought, plan, render
+        case agentId = "agent_id"
         case finalAction = "final_action"
         case currentGoal = "current_goal"
         case nextPlanStep = "next_plan_step"
@@ -172,4 +178,13 @@ final class SpriteCache {
     }
 
     func image(for id: String) -> CGImage? { images[id] }
+}
+
+// MARK: - Agent colors
+
+private let agentPalette: [Color] = [.green, .blue, .orange, .purple]
+
+func agentColor(for agentId: String) -> Color {
+    let idx = Int(agentId.split(separator: "_").last ?? "1") ?? 1
+    return agentPalette[(idx - 1) % agentPalette.count]
 }

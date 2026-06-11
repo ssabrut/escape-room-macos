@@ -83,8 +83,12 @@ private struct RoomCanvasView: View {
             drawWalls(ctx: ctx, size: size, p: p)
             drawDoors(ctx: ctx, size: size, scaleX: scaleX, scaleY: scaleY, p: p)
             drawObjects(ctx: ctx, scaleX: scaleX, scaleY: scaleY, p: p)
-            if room.isCurrentRoom {
-                drawPlayer(ctx: ctx, size: size, p: p)
+            if let agentsHere = room.agentsHere, !agentsHere.isEmpty {
+                for (idx, agentId) in agentsHere.enumerated() {
+                    drawPlayer(ctx: ctx, size: size, p: p, agentIndex: idx, color: agentColor(for: agentId))
+                }
+            } else if room.isCurrentRoom {
+                drawPlayer(ctx: ctx, size: size, p: p, agentIndex: 0, color: .green)
             }
         }
         .drawingGroup()
@@ -394,13 +398,14 @@ private struct RoomCanvasView: View {
 
     // MARK: Player
 
-    private func drawPlayer(ctx: GraphicsContext, size: CGSize, p: CGFloat) {
-        let px = size.width / 2 - p * 0.75
+    private func drawPlayer(ctx: GraphicsContext, size: CGSize, p: CGFloat, agentIndex: Int, color: Color) {
+        let offsetX = CGFloat(agentIndex) * (p * 1.8)
+        let px = size.width / 2 - p * 0.75 + offsetX
         let py = size.height * 0.62
         ctx.fill(Path(CGRect(x: px + p * 0.1, y: py + p * 2.2, width: p * 1.1, height: p * 0.25)),
                  with: .color(.black.opacity(0.35)))
         ctx.fill(Path(CGRect(x: px, y: py + p * 0.8, width: p * 1.5, height: p * 1.4)),
-                 with: .color(.green))
+                 with: .color(color))
         ctx.fill(Path(CGRect(x: px + p * 0.2, y: py, width: p * 1.1, height: p * 0.8)),
                  with: .color(Color(red: 0.88, green: 0.72, blue: 0.58)))
     }
