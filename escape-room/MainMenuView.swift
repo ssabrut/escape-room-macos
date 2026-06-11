@@ -13,6 +13,8 @@ struct MainMenuView: View {
     let onNewGame: () -> Void
     let onLoadGame: () -> Void
 
+    @StateObject private var audio = AudioManager.shared
+
     var body: some View {
         GeometryReader { geo in
             ZStack {
@@ -29,9 +31,47 @@ struct MainMenuView: View {
                     .frame(maxWidth: min(geo.size.width * 0.85, 480))
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
+
+                VStack {
+                    HStack {
+                        Spacer()
+                        MuteButton(isMuted: audio.isMuted, action: audio.toggleMute)
+                            .padding(.top, 16)
+                            .padding(.trailing, 16)
+                    }
+                    Spacer()
+                }
             }
         }
         .ignoresSafeArea()
+        .onAppear {
+            audio.playMusic(named: "main_theme")
+        }
+        .onDisappear {
+            audio.stopMusic()
+        }
+    }
+}
+
+// MARK: - Mute button
+
+private struct MuteButton: View {
+    let isMuted: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(WoodTheme.title)
+                .padding(10)
+                .background(
+                    Circle()
+                        .fill(WoodTheme.frame)
+                        .overlay(Circle().strokeBorder(WoodTheme.frameDark, lineWidth: 3))
+                )
+        }
+        .buttonStyle(.plain)
     }
 }
 
