@@ -20,6 +20,7 @@ final class EscapeRoomViewModel: ObservableObject {
     @Published var progressMessage: String?
     @Published var startedAt: Date?
     @Published var spriteETA: TimeInterval?
+    @Published var solverTicks: [SolverTickEvent] = []
 
     private var spriteStageStart: Date?
 
@@ -39,13 +40,14 @@ final class EscapeRoomViewModel: ObservableObject {
         startedAt = Date()
         spriteETA = nil
         spriteStageStart = nil
+        solverTicks = []
 
         var request = URLRequest(url: baseURL.appendingPathComponent("generate"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
         request.setValue(Self.apiKey, forHTTPHeaderField: "X-API-Key")
-        let body: [String: Any] = ["theme": theme, "hard_mode": hardMode, "num_rooms": numRooms]
+        let body: [String: Any] = ["theme": theme, "hard_mode": hardMode, "num_rooms": numRooms, "solve": true]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
@@ -60,6 +62,17 @@ final class EscapeRoomViewModel: ObservableObject {
                 case "progress":
                     progressMessage = event.message
                     updateSpriteETA(for: event)
+                case "sprites":
+                    if let spritesEvent = try? JSONDecoder().decode(SpritesEvent.self, from: lineData) {
+                        SpriteCache.shared.load(sprites: spritesEvent.sprites)
+                    }
+                case "tick":
+                    if let tickEvent = try? JSONDecoder().decode(SolverTickEvent.self, from: lineData) {
+                        solverTicks.append(tickEvent)
+                        if let render = tickEvent.render {
+                            world = render
+                        }
+                    }
                 case "done":
                     let response = try JSONDecoder().decode(GenerateResponse.self, from: lineData)
                     if let sprites = response.sprites { SpriteCache.shared.load(sprites: sprites) }
@@ -170,10 +183,10 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if vm.isLoading {
+                if let world = vm.world {
+                    GameView(world: world, ticks: vm.solverTicks, isLive: vm.isLoading, liveMessage: vm.progressMessage)
+                } else if vm.isLoading {
                     LoadingView(liveMessage: vm.progressMessage, startedAt: vm.startedAt, eta: vm.spriteETA)
-                } else if let world = vm.world {
-                    GameView(world: world)
                 } else if let error = vm.errorMessage {
                     ZStack {
                         SkyBackground()
@@ -383,6 +396,9 @@ private struct LoadingView: View {
 
 private struct GameView: View {
     let world: RenderWorld
+    let ticks: [SolverTickEvent]
+    var isLive: Bool = false
+    var liveMessage: String? = nil
 
     var body: some View {
         GeometryReader { geo in
@@ -394,7 +410,7 @@ private struct GameView: View {
                         DungeonMapView(world: world)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                        AgentConversationView()
+                        AgentConversationView(ticks: ticks, isLive: isLive)
                             .frame(width: min(geo.size.width * 0.32, 360))
                     }
                 } else {
@@ -402,7 +418,7 @@ private struct GameView: View {
                         DungeonMapView(world: world)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                        AgentConversationView()
+                        AgentConversationView(ticks: ticks, isLive: isLive)
                             .frame(height: min(geo.size.height * 0.32, 280))
                     }
                 }
@@ -417,29 +433,119 @@ private struct GameView: View {
 // MARK: - Agent conversation panel
 
 private struct AgentConversationView: View {
+    let ticks: [SolverTickEvent]
+    var isLive: Bool = false
+
+    @State private var pulse = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("AGENT CONVERSATION")
-                .font(.system(size: 11, weight: .heavy, design: .rounded))
-                .foregroundColor(WoodTheme.title)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(WoodTheme.frame)
+            HStack(spacing: 6) {
+                Text("AGENT CONVERSATION")
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .foregroundColor(WoodTheme.title)
 
-            VStack {
-                Spacer()
-                Text("No messages yet.")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(WoodTheme.frameDark.opacity(0.6))
+                if isLive {
+                    Circle()
+                        .fill(Color(red: 0.85, green: 0.25, blue: 0.20))
+                        .frame(width: 7, height: 7)
+                        .opacity(pulse ? 1.0 : 0.35)
+                        .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
+                        .onAppear { pulse = true }
+
+                    Text("LIVE")
+                        .font(.system(size: 10, weight: .heavy, design: .rounded))
+                        .foregroundColor(Color(red: 0.85, green: 0.25, blue: 0.20))
+                }
+
                 Spacer()
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
-            .padding(.bottom, 12)
-            .background(WoodTheme.parchment)
+            .padding(.vertical, 10)
+            .background(WoodTheme.frame)
+
+            if ticks.isEmpty {
+                VStack {
+                    Spacer()
+                    Text(isLive ? "Waiting for the agent to start…" : "No messages yet.")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(WoodTheme.frameDark.opacity(0.6))
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+                .background(WoodTheme.parchment)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 8) {
+                            ForEach(ticks) { tick in
+                                SolverTickBubble(tick: tick)
+                                    .id(tick.id)
+                            }
+                        }
+                        .padding(12)
+                    }
+                    .background(WoodTheme.parchment)
+                    .onChange(of: ticks.count) { _, _ in
+                        if let last = ticks.last {
+                            withAnimation(.easeOut(duration: 0.25)) {
+                                proxy.scrollTo(last.id, anchor: .bottom)
+                            }
+                        }
+                    }
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+// MARK: - Solver tick bubble
+
+private struct SolverTickBubble: View {
+    let tick: SolverTickEvent
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Tick \(tick.tick) · \(tick.room)")
+                .font(.system(size: 10, weight: .heavy, design: .rounded))
+                .foregroundColor(WoodTheme.frameDark.opacity(0.6))
+
+            if let outcome = tick.prevOutcome, let action = outcome.action {
+                let success = outcome.success ?? true
+                Text("↳ \(action) → \(outcome.note ?? "")")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(success ? Color(red: 0.18, green: 0.42, blue: 0.20) : Color(red: 0.55, green: 0.18, blue: 0.12))
+            }
+
+            if let thought = tick.thought, !thought.isEmpty {
+                Text(thought)
+                    .font(.system(size: 12, design: .monospaced).italic())
+                    .foregroundColor(WoodTheme.frameDark)
+            }
+
+            if let plan = tick.plan, !plan.isEmpty {
+                Text("Plan: \(plan)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(WoodTheme.frameDark.opacity(0.75))
+            }
+
+            if let action = tick.finalAction {
+                Text("→ \(action)")
+                    .font(.system(size: 12, weight: .heavy, design: .monospaced))
+                    .foregroundColor(Color(red: 0.62, green: 0.45, blue: 0.10))
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(WoodTheme.frame.opacity(0.12))
+        )
     }
 }
 

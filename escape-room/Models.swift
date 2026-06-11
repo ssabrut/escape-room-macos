@@ -83,6 +83,48 @@ struct StreamEvent: Codable {
     let detail: String?
 }
 
+// MARK: - Streaming solver tick events
+
+struct SolverTickEvent: Codable, Identifiable {
+    var id: Int { tick }
+
+    let type: String  // "tick"
+    let tick: Int
+    let room: String
+    let thought: String?
+    let plan: String?
+    let finalAction: String?
+    let currentGoal: String?
+    let nextPlanStep: String?
+    let prevOutcome: PrevOutcome?
+    let newMilestones: [String]?
+    let gatesFired: [String]?
+    let render: RenderWorld?
+
+    struct PrevOutcome: Codable {
+        let action: String?
+        let note: String?
+        let success: Bool?
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type, tick, room, thought, plan, render
+        case finalAction = "final_action"
+        case currentGoal = "current_goal"
+        case nextPlanStep = "next_plan_step"
+        case prevOutcome = "prev_outcome"
+        case newMilestones = "new_milestones"
+        case gatesFired = "gates_fired"
+    }
+}
+
+// MARK: - Streaming sprites-ready event
+
+struct SpritesEvent: Codable {
+    let type: String  // "sprites"
+    let sprites: [String: String]  // objectId → base64 PNG
+}
+
 // MARK: - Decoded sprite cache
 
 final class SpriteCache {
