@@ -90,6 +90,26 @@ struct SolveResponse: Codable {
     }
 }
 
+// MARK: - Saved run summary (GET /generate/runs)
+
+struct SavedRunSummary: Codable, Identifiable {
+    var id: String { filename }
+
+    let filename: String
+    let theme: String
+    let createdAt: Date
+    let numRooms: Int
+    let numObjects: Int
+    let solver: SolverLog?
+
+    enum CodingKeys: String, CodingKey {
+        case filename, theme, solver
+        case createdAt = "created_at"
+        case numRooms = "num_rooms"
+        case numObjects = "num_objects"
+    }
+}
+
 // MARK: - Solver result
 
 struct SolverLog: Codable {

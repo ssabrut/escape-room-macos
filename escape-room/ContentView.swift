@@ -23,6 +23,10 @@ final class EscapeRoomViewModel: ObservableObject {
     @Published var solverTicks: [SolverTickEvent] = []
     @Published var solverResult: SolverLog?
 
+    @Published var savedRuns: [SavedRunSummary] = []
+    @Published var isLoadingRuns = false
+    @Published var runsErrorMessage: String?
+
     private var spriteStageStart: Date?
 
     private static let apiKey = "84beec4c-8d7d-44fa-be4d-15ff630b8fa8"
@@ -32,6 +36,15 @@ final class EscapeRoomViewModel: ObservableObject {
         config.timeoutIntervalForRequest = 3600
         config.timeoutIntervalForResource = 3600
         return URLSession(configuration: config)
+    }()
+
+    private static let runDateDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        decoder.dateDecodingStrategy = .formatted(formatter)
+        return decoder
     }()
 
     func generate(theme: String = "Haunted House", hardMode: Bool = true, numRooms: Int = 3, numAgents: Int = 1) async {
@@ -130,18 +143,36 @@ final class EscapeRoomViewModel: ObservableObject {
         spriteETA = perSprite * Double(total - current)
     }
 
-    func loadFromJSON(_ jsonString: String, numAgents: Int = 1) async {
+    /// Fetches the list of previously generated worlds from `/generate/runs`.
+    func fetchSavedRuns() async {
+        isLoadingRuns = true
+        runsErrorMessage = nil
+
+        var request = URLRequest(url: baseURL.appendingPathComponent("generate/runs"))
+        request.setValue(Self.apiKey, forHTTPHeaderField: "X-API-Key")
+
+        do {
+            let (data, _) = try await session.data(for: request)
+            savedRuns = try Self.runDateDecoder.decode([SavedRunSummary].self, from: data)
+        } catch {
+            runsErrorMessage = error.localizedDescription
+        }
+
+        isLoadingRuns = false
+    }
+
+    /// Loads a previously generated world by filename and starts a live solve.
+    func loadSavedRun(filename: String, numAgents: Int = 1) async {
         errorMessage = nil
         solverTicks = []
         solverResult = nil
 
-        guard let data = jsonString.data(using: .utf8) else {
-            errorMessage = "Invalid text encoding."
-            return
-        }
+        var request = URLRequest(url: baseURL.appendingPathComponent("generate/runs/\(filename)"))
+        request.setValue(Self.apiKey, forHTTPHeaderField: "X-API-Key")
 
         let worldDict: Any?
         do {
+            let (data, _) = try await session.data(for: request)
             let response = try JSONDecoder().decode(GenerateResponse.self, from: data)
             if let sprites = response.sprites { SpriteCache.shared.load(sprites: sprites) }
             world = response.render
@@ -150,7 +181,7 @@ final class EscapeRoomViewModel: ObservableObject {
             let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             worldDict = raw?["world"]
         } catch {
-            errorMessage = "JSON parse error: \(error.localizedDescription)"
+            errorMessage = "Failed to load run: \(error.localizedDescription)"
             return
         }
 
@@ -331,11 +362,17 @@ struct ContentView: View {
                         numRooms: $numRooms,
                         hardMode: $hardMode,
                         numAgents: $numAgents,
+                        savedRuns: vm.savedRuns,
+                        isLoadingRuns: vm.isLoadingRuns,
+                        runsErrorMessage: vm.runsErrorMessage,
                         onGenerate: {
                             Task { await vm.generate(theme: selectedTheme, hardMode: hardMode, numRooms: numRooms, numAgents: numAgents) }
                         },
-                        onLoadJSON: { json in
-                            Task { await vm.loadFromJSON(json, numAgents: numAgents) }
+                        onRefreshRuns: {
+                            Task { await vm.fetchSavedRuns() }
+                        },
+                        onLoadRun: { filename in
+                            Task { await vm.loadSavedRun(filename: filename, numAgents: numAgents) }
                         },
                         onBack: {
                             screen = .mainMenu
@@ -828,11 +865,13 @@ private struct StartView: View {
     @Binding var numRooms: Int
     @Binding var hardMode: Bool
     @Binding var numAgents: Int
+    let savedRuns: [SavedRunSummary]
+    let isLoadingRuns: Bool
+    let runsErrorMessage: String?
     let onGenerate: () -> Void
-    let onLoadJSON: (String) -> Void
+    let onRefreshRuns: () -> Void
+    let onLoadRun: (String) -> Void
     let onBack: () -> Void
-
-    @State private var jsonText = ""
 
     var body: some View {
         ZStack {
@@ -980,53 +1019,142 @@ private struct StartView: View {
                             .padding(.horizontal, 24)
 
                     } else {
-                        // JSON paste area
+                        // Agent count (applies to the live solve of the loaded world)
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("PASTE WORLD JSON")
+                            Text("WORLD SETTINGS")
                                 .font(.system(size: 12, weight: .heavy, design: .rounded))
                                 .foregroundColor(WoodTheme.frameDark)
 
-                            TextEditor(text: $jsonText)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundColor(WoodTheme.frameDark)
-                                .scrollContentBackground(.hidden)
-                                .background(WoodTheme.parchment)
-                                .frame(minHeight: 200)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(WoodTheme.frame, lineWidth: 3))
-
-                            Text("Paste the full API response JSON (must contain a \"render\" key).")
-                                .font(.system(size: 11, design: .rounded))
-                                .foregroundColor(WoodTheme.frameDark.opacity(0.8))
-                        }
-                        .padding(.horizontal, 24)
-
-                        HStack(spacing: 12) {
-                            Button {
-                                jsonText = ""
-                            } label: {
-                                Text("CLEAR")
-                                    .font(.system(size: 15, weight: .heavy, design: .rounded))
-                                    .foregroundColor(WoodTheme.title)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 14)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 10)
-                                            .fill(WoodTheme.frame)
-                                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(WoodTheme.frameDark, lineWidth: 3))
-                                    )
+                            Stepper(value: $numAgents, in: 1...4) {
+                                HStack {
+                                    Text("Agents")
+                                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                                        .foregroundColor(WoodTheme.frameDark)
+                                    Spacer()
+                                    Text("\(numAgents)")
+                                        .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                        .foregroundColor(WoodTheme.frameDark)
+                                }
                             }
-                            .buttonStyle(.plain)
-
-                            WoodButton(label: "LOAD WORLD", systemImage: "scroll.fill", iconColor: .pink, action: { onLoadJSON(jsonText) }, isEnabled: !jsonText.isEmpty)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .background(WoodTheme.parchment)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(WoodTheme.frame, lineWidth: 3))
                         }
                         .padding(.horizontal, 24)
+
+                        // Saved worlds grid
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("SAVED WORLDS")
+                                    .font(.system(size: 12, weight: .heavy, design: .rounded))
+                                    .foregroundColor(WoodTheme.frameDark)
+
+                                Spacer()
+
+                                Button(action: onRefreshRuns) {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.system(size: 12, weight: .heavy))
+                                        .foregroundColor(WoodTheme.frameDark)
+                                }
+                                .buttonStyle(.plain)
+                            }
+
+                            if isLoadingRuns {
+                                HStack {
+                                    Spacer()
+                                    ProgressView()
+                                        .padding(.vertical, 24)
+                                    Spacer()
+                                }
+                            } else if let runsErrorMessage {
+                                Text(runsErrorMessage)
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundColor(Color(red: 0.55, green: 0.18, blue: 0.12))
+                                    .padding(.vertical, 12)
+                            } else if savedRuns.isEmpty {
+                                Text("No saved worlds found.")
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundColor(WoodTheme.frameDark.opacity(0.6))
+                                    .padding(.vertical, 12)
+                            } else {
+                                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                                    ForEach(savedRuns) { run in
+                                        SavedRunCard(run: run) {
+                                            onLoadRun(run.filename)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 24)
+                        .onAppear {
+                            if savedRuns.isEmpty {
+                                onRefreshRuns()
+                            }
+                        }
                     }
 
                     Spacer(minLength: 32)
                 }
             }
         }
+    }
+}
+
+// MARK: - Saved run card
+
+private let savedRunDateFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "MMM d, HH:mm"
+    return formatter
+}()
+
+private struct SavedRunCard: View {
+    let run: SavedRunSummary
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(run.theme)
+                    .font(.system(size: 14, weight: .heavy, design: .rounded))
+                    .foregroundColor(WoodTheme.frameDark)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(savedRunDateFormatter.string(from: run.createdAt))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(WoodTheme.frameDark.opacity(0.6))
+
+                Divider().background(WoodTheme.frame.opacity(0.4))
+
+                Label("\(run.numRooms) room\(run.numRooms == 1 ? "" : "s")", systemImage: "square.grid.2x2")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(WoodTheme.frameDark.opacity(0.8))
+
+                Label("\(run.numObjects) object\(run.numObjects == 1 ? "" : "s")", systemImage: "shippingbox")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(WoodTheme.frameDark.opacity(0.8))
+
+                if let solver = run.solver {
+                    Label(
+                        solver.won ? "Won · \(Int(solver.efficiency * 100))%" : "Lost",
+                        systemImage: solver.won ? "checkmark.seal.fill" : "xmark.seal.fill"
+                    )
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .foregroundColor(solver.won ? Color(red: 0.18, green: 0.48, blue: 0.22) : Color(red: 0.55, green: 0.18, blue: 0.12))
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(WoodTheme.parchment)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(WoodTheme.frame, lineWidth: 3))
+        }
+        .buttonStyle(.plain)
     }
 }
 
