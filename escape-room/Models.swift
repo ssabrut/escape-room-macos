@@ -70,6 +70,19 @@ struct RenderWorld: Codable {
 struct GenerateResponse: Codable {
     let render: RenderWorld
     let sprites: [String: String]?  // objectId → base64 PNG
+    let solver: SolverLog?
+}
+
+// MARK: - Solver result
+
+struct SolverLog: Codable {
+    let won: Bool
+    let ticks: Int
+    let optimal: Int
+    let reward: Double
+    let efficiency: Double
+    let wasted: Int
+    let history: [String]
 }
 
 // MARK: - Streaming progress events

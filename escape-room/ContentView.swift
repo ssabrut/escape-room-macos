@@ -21,6 +21,7 @@ final class EscapeRoomViewModel: ObservableObject {
     @Published var startedAt: Date?
     @Published var spriteETA: TimeInterval?
     @Published var solverTicks: [SolverTickEvent] = []
+    @Published var solverResult: SolverLog?
 
     private var spriteStageStart: Date?
 
@@ -41,6 +42,7 @@ final class EscapeRoomViewModel: ObservableObject {
         spriteETA = nil
         spriteStageStart = nil
         solverTicks = []
+        solverResult = nil
 
         var request = URLRequest(url: baseURL.appendingPathComponent("generate"))
         request.httpMethod = "POST"
@@ -77,6 +79,7 @@ final class EscapeRoomViewModel: ObservableObject {
                     let response = try JSONDecoder().decode(GenerateResponse.self, from: lineData)
                     if let sprites = response.sprites { SpriteCache.shared.load(sprites: sprites) }
                     world = response.render
+                    solverResult = response.solver
                     sawDone = true
                 case "error":
                     errorMessage = event.detail ?? "Unknown error"
@@ -184,7 +187,7 @@ struct ContentView: View {
         NavigationStack {
             Group {
                 if let world = vm.world {
-                    GameView(world: world, ticks: vm.solverTicks, isLive: vm.isLoading, liveMessage: vm.progressMessage)
+                    GameView(world: world, ticks: vm.solverTicks, isLive: vm.isLoading, liveMessage: vm.progressMessage, result: vm.solverResult)
                 } else if vm.isLoading {
                     LoadingView(liveMessage: vm.progressMessage, startedAt: vm.startedAt, eta: vm.spriteETA)
                 } else if let error = vm.errorMessage {
@@ -399,33 +402,126 @@ private struct GameView: View {
     let ticks: [SolverTickEvent]
     var isLive: Bool = false
     var liveMessage: String? = nil
+    var result: SolverLog? = nil
+
+    @State private var showResult = false
 
     var body: some View {
         GeometryReader { geo in
             let isWide = geo.size.width > geo.size.height
 
-            VStack(spacing: 1) {
-                if isWide {
-                    HStack(spacing: 1) {
-                        DungeonMapView(world: world)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ZStack {
+                VStack(spacing: 1) {
+                    if isWide {
+                        HStack(spacing: 1) {
+                            DungeonMapView(world: world)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                        AgentConversationView(ticks: ticks, isLive: isLive)
-                            .frame(width: min(geo.size.width * 0.32, 360))
+                            AgentConversationView(ticks: ticks, isLive: isLive)
+                                .frame(width: min(geo.size.width * 0.32, 360))
+                        }
+                    } else {
+                        VStack(spacing: 1) {
+                            DungeonMapView(world: world)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                            AgentConversationView(ticks: ticks, isLive: isLive)
+                                .frame(height: min(geo.size.height * 0.32, 280))
+                        }
                     }
-                } else {
-                    VStack(spacing: 1) {
-                        DungeonMapView(world: world)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                        AgentConversationView(ticks: ticks, isLive: isLive)
-                            .frame(height: min(geo.size.height * 0.32, 280))
+                    ObjectiveBarView(world: world)
+                }
+                .background(WoodTheme.frameDark)
+
+                if showResult, let result {
+                    GameOverPopupView(result: result) {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            showResult = false
+                        }
                     }
                 }
-
-                ObjectiveBarView(world: world)
             }
-            .background(WoodTheme.frameDark)
+        }
+        .onChange(of: result?.won) { _, won in
+            guard won != nil else { return }
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) {
+                showResult = true
+            }
+        }
+    }
+}
+
+// MARK: - Game over popup
+
+private struct GameOverPopupView: View {
+    let result: SolverLog
+    let onDismiss: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.45)
+                .ignoresSafeArea()
+                .onTapGesture(perform: onDismiss)
+
+            VStack(spacing: 14) {
+                Image(systemName: result.won ? "door.left.hand.open" : "lock.fill")
+                    .font(.system(size: 40))
+                    .foregroundColor(result.won ? WoodTheme.leaf : WoodTheme.ink)
+
+                Text(result.won ? "AGENT ESCAPED!" : "AGENT TRAPPED")
+                    .font(.system(size: 22, weight: .black, design: .rounded))
+                    .foregroundColor(WoodTheme.title)
+                    .shadow(color: Color(red: 0.30, green: 0.15, blue: 0.05), radius: 0, x: 1, y: 1)
+
+                Text(result.won
+                     ? "The agent found a way out in \(result.ticks) ticks."
+                     : "The agent got stuck after \(result.ticks) ticks.")
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundColor(WoodTheme.parchment)
+                    .multilineTextAlignment(.center)
+
+                HStack(spacing: 18) {
+                    statColumn(title: "OPTIMAL", value: "\(result.optimal)")
+                    statColumn(title: "WASTED", value: "\(result.wasted)")
+                    statColumn(title: "EFFICIENCY", value: String(format: "%.0f%%", result.efficiency * 100))
+                }
+                .padding(.top, 4)
+
+                Button(action: onDismiss) {
+                    Text("CONTINUE")
+                        .font(.system(size: 14, weight: .heavy, design: .rounded))
+                        .foregroundColor(WoodTheme.title)
+                        .padding(.horizontal, 28)
+                        .padding(.vertical, 10)
+                        .background(
+                            Capsule()
+                                .fill(WoodTheme.frame)
+                                .overlay(Capsule().strokeBorder(WoodTheme.frameDark, lineWidth: 3))
+                        )
+                }
+                .padding(.top, 6)
+            }
+            .padding(24)
+            .frame(maxWidth: 320)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(WoodTheme.frame)
+                    .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(WoodTheme.frameDark, lineWidth: 4))
+            )
+            .shadow(color: .black.opacity(0.4), radius: 12, x: 0, y: 8)
+            .transition(.scale.combined(with: .opacity))
+        }
+    }
+
+    private func statColumn(title: String, value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.system(size: 16, weight: .heavy, design: .rounded))
+                .foregroundColor(WoodTheme.title)
+            Text(title)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundColor(WoodTheme.parchment.opacity(0.7))
         }
     }
 }
