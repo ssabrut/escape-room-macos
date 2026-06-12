@@ -639,7 +639,7 @@ private struct GameView: View {
 
                     if isWide {
                         HStack(spacing: 1) {
-                            DungeonMapView(world: world)
+                            DungeonMapView(world: world, ticks: ticks)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                             AgentConversationView(ticks: ticks, isLive: isLive, storyboard: storyboard)
@@ -647,7 +647,7 @@ private struct GameView: View {
                         }
                     } else {
                         VStack(spacing: 1) {
-                            DungeonMapView(world: world)
+                            DungeonMapView(world: world, ticks: ticks)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                             AgentConversationView(ticks: ticks, isLive: isLive, storyboard: storyboard)

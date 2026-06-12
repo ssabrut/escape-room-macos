@@ -10,6 +10,7 @@ private let roomGap:       CGFloat = 4
 
 struct DungeonMapView: View {
     let world: RenderWorld
+    var ticks: [SolverTickEvent] = []
 
     var body: some View {
         GeometryReader { geo in
@@ -37,10 +38,44 @@ struct DungeonMapView: View {
                         .frame(width: roomSize - roomGap, height: roomSize - roomGap)
                         .position(x: cx, y: cy)
                 }
+
+                ThoughtBubbleOverlay(
+                    ticks: ticks,
+                    agentPositions: agentPositions(roomSize: roomSize, originX: originX, originY: originY)
+                )
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
         .background(Color(red: 0.05, green: 0.05, blue: 0.08))
+    }
+
+    /// Computes each agent's sprite position in the map's coordinate space,
+    /// mirroring the offsets used by `RoomCanvasView.drawPlayer`.
+    private func agentPositions(roomSize: CGFloat, originX: CGFloat, originY: CGFloat) -> [String: CGPoint] {
+        var positions: [String: CGPoint] = [:]
+
+        for room in world.rooms {
+            let agentIds = room.agentsHere ?? (room.isCurrentRoom ? [world.party.agentId ?? "agent_1"] : [])
+            guard !agentIds.isEmpty else { continue }
+
+            let roomOriginX = originX + CGFloat(room.col) * roomSize + roomGap / 2
+            let roomOriginY = originY + CGFloat(room.row) * roomSize + roomGap / 2
+            let size = roomSize - roomGap
+
+            let tilesW = CGFloat(room.widthTiles  ?? Int(roomTileCount))
+            let tilesH = CGFloat(room.heightTiles ?? Int(roomTileCount))
+            let p = min(size / tilesW, size / tilesH)
+            let s = p * (1 / 1.5)
+
+            for (idx, agentId) in agentIds.enumerated() {
+                let offsetX = CGFloat(idx) * p
+                let px = size / 2 - s * 0.75 + offsetX + s * 0.75
+                let py = size * 0.62 + s * 0.4
+                positions[agentId] = CGPoint(x: roomOriginX + px, y: roomOriginY + py)
+            }
+        }
+
+        return positions
     }
 
     private func drawCorridors(ctx: GraphicsContext, roomSize: CGFloat, originX: CGFloat, originY: CGFloat) {
@@ -431,6 +466,122 @@ private struct RoomCanvasView: View {
                  with: .color(color))
         ctx.fill(Path(CGRect(x: px + s * 0.2, y: py, width: s * 1.1, height: s * 0.8)),
                  with: .color(Color(red: 0.88, green: 0.72, blue: 0.58)))
+    }
+}
+
+// MARK: - Thought bubble overlay (floats above each agent's sprite)
+
+/// How long a thought bubble stays visible after a new tick arrives before
+/// fading back out.
+private let thoughtBubbleHoldDuration: TimeInterval = 3.5
+
+/// Floats a small speech bubble above each agent showing their latest
+/// `thought`, fading in when a new tick arrives and fading out after a
+/// short hold.
+private struct ThoughtBubbleOverlay: View {
+    let ticks: [SolverTickEvent]
+    let agentPositions: [String: CGPoint]
+
+    /// Latest tick (with a non-empty thought) per agent.
+    private var latestThoughts: [String: SolverTickEvent] {
+        var result: [String: SolverTickEvent] = [:]
+        for tick in ticks {
+            guard let thought = tick.thought, !thought.isEmpty else { continue }
+            result[tick.agentId ?? "agent_1"] = tick
+        }
+        return result
+    }
+
+    var body: some View {
+        ForEach(Array(latestThoughts.keys.sorted()), id: \.self) { agentId in
+            if let tick = latestThoughts[agentId], let position = agentPositions[agentId] {
+                ThoughtBubble(tick: tick, color: agentColor(for: agentId))
+                    .position(x: position.x, y: position.y)
+            }
+        }
+    }
+}
+
+/// A single speech bubble that fades in when its `tick` changes, holds for
+/// `thoughtBubbleHoldDuration`, then fades back out.
+private struct ThoughtBubble: View {
+    let tick: SolverTickEvent
+    let color: Color
+
+    @State private var visible = false
+    @State private var hideTask: Task<Void, Never>?
+
+    private let parchment = Color(red: 0.96, green: 0.93, blue: 0.84)
+    private let inkColor = Color(red: 0.25, green: 0.22, blue: 0.18)
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text(tick.thought ?? "")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(inkColor)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .frame(maxWidth: 140)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(parchment)
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(color, lineWidth: 1.5))
+                )
+
+            BubbleTail(color: color, fill: parchment)
+                .frame(width: 12, height: 6)
+        }
+        .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 2)
+        .opacity(visible ? 1 : 0)
+        .offset(y: -54)
+        .onAppear { showAndScheduleHide() }
+        .onChange(of: tick.id) { _, _ in showAndScheduleHide() }
+    }
+
+    private func showAndScheduleHide() {
+        hideTask?.cancel()
+        withAnimation(.easeOut(duration: 0.2)) {
+            visible = true
+        }
+        hideTask = Task {
+            try? await Task.sleep(nanoseconds: UInt64(thoughtBubbleHoldDuration * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeIn(duration: 0.4)) {
+                visible = false
+            }
+        }
+    }
+}
+
+/// Small downward-pointing triangle with an outline, used as the speech
+/// bubble's tail.
+private struct BubbleTail: View {
+    let color: Color
+    let fill: Color
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            ZStack {
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: 0))
+                    path.addLine(to: CGPoint(x: w, y: 0))
+                    path.addLine(to: CGPoint(x: w / 2, y: h))
+                    path.closeSubpath()
+                }
+                .fill(fill)
+
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: 0))
+                    path.addLine(to: CGPoint(x: w / 2, y: h))
+                    path.addLine(to: CGPoint(x: w, y: 0))
+                }
+                .stroke(color, lineWidth: 1.5)
+            }
+        }
     }
 }
 
