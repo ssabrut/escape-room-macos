@@ -69,17 +69,50 @@ struct RenderWorld: Codable {
     }
 }
 
+// MARK: - Storyboard (clue board data)
+
+/// A named suspect for the mystery's clue board. `is_killer` is stripped
+/// server-side before this ever reaches the client.
+struct Suspect: Codable, Identifiable {
+    var id: String { name }
+
+    let name: String
+    let connectionToVictim: String?
+    let apparentMotive: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case connectionToVictim = "connection_to_victim"
+        case apparentMotive = "apparent_motive"
+    }
+}
+
+struct StoryboardMystery: Codable {
+    let proofObjectId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case proofObjectId = "proof_object_id"
+    }
+}
+
+/// Narrative layer for a generated world — only the fields the clue board needs.
+struct Storyboard: Codable {
+    let suspects: [Suspect]
+    let mystery: StoryboardMystery?
+}
+
 // MARK: - Top-level API response
 
 struct GenerateResponse: Codable {
     let render: RenderWorld
     let sprites: [String: String]?  // objectId → base64 PNG
     let solver: SolverLog?
+    let storyboard: Storyboard?
     let narrationOpening: String?
     let narrationEnding: String?
 
     enum CodingKeys: String, CodingKey {
-        case render, sprites, solver
+        case render, sprites, solver, storyboard
         case narrationOpening = "narration_opening"
         case narrationEnding = "narration_ending"
     }
@@ -130,6 +163,25 @@ struct SolverLog: Codable {
     let efficiency: Double
     let wasted: Int
     let history: [String]
+    let wrongDeduction: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case won, ticks, optimal, reward, efficiency, wasted, history
+        case wrongDeduction = "wrong_deduction"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        won = try container.decode(Bool.self, forKey: .won)
+        ticks = try container.decode(Int.self, forKey: .ticks)
+        optimal = try container.decode(Int.self, forKey: .optimal)
+        reward = try container.decode(Double.self, forKey: .reward)
+        efficiency = try container.decode(Double.self, forKey: .efficiency)
+        wasted = try container.decode(Int.self, forKey: .wasted)
+        history = try container.decode([String].self, forKey: .history)
+        // Older saved runs predate this field — default to false rather than fail.
+        wrongDeduction = try container.decodeIfPresent(Bool.self, forKey: .wrongDeduction) ?? false
+    }
 }
 
 // MARK: - Streaming progress events
@@ -219,4 +271,16 @@ private let agentPalette: [Color] = [.green, .blue, .orange, .purple]
 func agentColor(for agentId: String) -> Color {
     let idx = Int(agentId.split(separator: "_").last ?? "1") ?? 1
     return agentPalette[(idx - 1) % agentPalette.count]
+}
+
+// MARK: - Milestone tokens (clue board evidence log)
+
+/// Milestone tokens look like "took:rusty_key" or "opened:supply_locker" —
+/// mirrors `_humanize` in `src/escape_rooms/agents/cognition.py`.
+func humanizeMilestone(_ token: String) -> String {
+    let parts = token.split(separator: ":", maxSplits: 1)
+    guard parts.count == 2 else { return token.replacingOccurrences(of: "_", with: " ") }
+    let kind = parts[0]
+    let rest = parts[1].replacingOccurrences(of: "_", with: " ")
+    return "\(kind) \(rest)"
 }

@@ -27,6 +27,7 @@ final class EscapeRoomViewModel: ObservableObject {
     @Published var solverResult: SolverLog?
     @Published var narrationOpening: String?
     @Published var narrationEnding: String?
+    @Published var storyboard: Storyboard?
 
     @Published var savedRuns: [SavedRunSummary] = []
     @Published var isLoadingRuns = false
@@ -69,6 +70,7 @@ final class EscapeRoomViewModel: ObservableObject {
         solverResult = nil
         narrationOpening = nil
         narrationEnding = nil
+        storyboard = nil
         hasStartedSolving = false
         pendingWorldDict = nil
         pendingStoryboardDict = nil
@@ -115,6 +117,7 @@ final class EscapeRoomViewModel: ObservableObject {
                     if let sprites = response.sprites { SpriteCache.shared.load(sprites: sprites) }
                     world = response.render
                     solverResult = response.solver
+                    storyboard = response.storyboard
                     if let opening = response.narrationOpening { narrationOpening = opening }
                     if let ending = response.narrationEnding { narrationEnding = ending }
 
@@ -199,6 +202,7 @@ final class EscapeRoomViewModel: ObservableObject {
         solverResult = nil
         narrationOpening = nil
         narrationEnding = nil
+        storyboard = nil
         hasStartedSolving = false
         pendingWorldDict = nil
         pendingStoryboardDict = nil
@@ -212,6 +216,7 @@ final class EscapeRoomViewModel: ObservableObject {
             if let sprites = response.sprites { SpriteCache.shared.load(sprites: sprites) }
             world = response.render
             narrationOpening = response.narrationOpening
+            storyboard = response.storyboard
 
             let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             pendingWorldDict = raw?["world"]
@@ -338,6 +343,7 @@ struct ContentView: View {
                         narrationOpening: vm.narrationOpening,
                         narrationEnding: vm.narrationEnding,
                         hasStartedSolving: vm.hasStartedSolving,
+                        storyboard: vm.storyboard,
                         onBegin: {
                             Task { await vm.beginSolving(numAgents: numAgents) }
                         }
@@ -592,6 +598,7 @@ private struct GameView: View {
     var narrationOpening: String? = nil
     var narrationEnding: String? = nil
     var hasStartedSolving: Bool = true
+    var storyboard: Storyboard? = nil
     var onBegin: () -> Void = {}
 
     @State private var showResult = false
@@ -612,7 +619,7 @@ private struct GameView: View {
                             DungeonMapView(world: world)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                            AgentConversationView(ticks: ticks, isLive: isLive)
+                            AgentConversationView(ticks: ticks, isLive: isLive, storyboard: storyboard)
                                 .frame(width: min(geo.size.width * 0.32, 360))
                         }
                     } else {
@@ -620,7 +627,7 @@ private struct GameView: View {
                             DungeonMapView(world: world)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                            AgentConversationView(ticks: ticks, isLive: isLive)
+                            AgentConversationView(ticks: ticks, isLive: isLive, storyboard: storyboard)
                                 .frame(height: min(geo.size.height * 0.32, 280))
                         }
                     }
@@ -764,7 +771,7 @@ private struct GameOverPopupView: View {
                 .onTapGesture(perform: onDismiss)
 
             VStack(spacing: 14) {
-                Text(result.won ? "CASE CLOSED" : "CASE COLD")
+                Text(result.won ? "CASE CLOSED" : (result.wrongDeduction ? "WRONG SUSPECT" : "CASE COLD"))
                     .font(.system(size: 12, weight: .heavy, design: .monospaced))
                     .foregroundColor(stampColor.opacity(0.7))
                     .padding(.horizontal, 10)
@@ -775,17 +782,19 @@ private struct GameOverPopupView: View {
                     )
                     .rotationEffect(.degrees(-3))
 
-                Image(systemName: result.won ? "door.left.hand.open" : "lock.fill")
+                Image(systemName: result.won ? "door.left.hand.open" : (result.wrongDeduction ? "person.fill.xmark" : "lock.fill"))
                     .font(.system(size: 40))
                     .foregroundColor(result.won ? Color(red: 0.18, green: 0.48, blue: 0.22) : stampColor)
 
-                Text(result.won ? "AGENT ESCAPED!" : "AGENT TRAPPED")
+                Text(result.won ? "AGENT ESCAPED!" : (result.wrongDeduction ? "WRONG ACCUSATION!" : "AGENT TRAPPED"))
                     .font(.system(size: 22, weight: .black, design: .rounded))
                     .foregroundColor(stampColor)
 
                 Text(result.won
                      ? "The agent found a way out in \(result.ticks) ticks."
-                     : "The agent got stuck after \(result.ticks) ticks.")
+                     : (result.wrongDeduction
+                        ? "The agent accused the wrong suspect and the real culprit got away."
+                        : "The agent got stuck after \(result.ticks) ticks."))
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundColor(inkColor)
                     .multilineTextAlignment(.center)
@@ -894,11 +903,19 @@ private struct ErrorBanner: View {
 /// gives up after this many ticks, so it's the denominator for progress.
 private let solverMaxTicks = 40
 
+/// Tabs for the right-hand panel: the live solver log vs. the mystery clue board.
+private enum CasePanelTab: String, CaseIterable {
+    case caseNotes = "CASE NOTES"
+    case clueBoard = "CLUE BOARD"
+}
+
 private struct AgentConversationView: View {
     let ticks: [SolverTickEvent]
     var isLive: Bool = false
+    var storyboard: Storyboard? = nil
 
     @State private var pulse = false
+    @State private var selectedTab: CasePanelTab = .caseNotes
 
     private let folderColor = Color(red: 0.78, green: 0.64, blue: 0.42)
     private let caseParchment = Color(red: 0.96, green: 0.93, blue: 0.84)
@@ -906,72 +923,253 @@ private struct AgentConversationView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Text("CASE NOTES")
-                    .font(.system(size: 11, weight: .heavy, design: .rounded))
-                    .foregroundColor(inkColor)
+            HStack(spacing: 0) {
+                ForEach(CasePanelTab.allCases, id: \.self) { tab in
+                    Button {
+                        selectedTab = tab
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(tab.rawValue)
+                                .font(.system(size: 11, weight: .heavy, design: .rounded))
+                                .foregroundColor(selectedTab == tab ? inkColor : inkColor.opacity(0.45))
 
-                if isLive {
-                    Circle()
-                        .fill(Color(red: 0.74, green: 0.14, blue: 0.12))
-                        .frame(width: 7, height: 7)
-                        .opacity(pulse ? 1.0 : 0.35)
-                        .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
-                        .onAppear { pulse = true }
-
-                    Text("LIVE")
-                        .font(.system(size: 10, weight: .heavy, design: .rounded))
-                        .foregroundColor(Color(red: 0.74, green: 0.14, blue: 0.12))
-                }
-
-                Spacer()
-
-                if isLive, let lastTick = ticks.last?.tick {
-                    Text("TICK \(lastTick)/\(solverMaxTicks)")
-                        .font(.system(size: 10, weight: .heavy, design: .rounded))
-                        .foregroundColor(inkColor.opacity(0.7))
+                            if tab == .caseNotes, isLive {
+                                Circle()
+                                    .fill(Color(red: 0.74, green: 0.14, blue: 0.12))
+                                    .frame(width: 7, height: 7)
+                                    .opacity(pulse ? 1.0 : 0.35)
+                                    .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
+                                    .onAppear { pulse = true }
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(selectedTab == tab ? caseParchment : folderColor)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(folderColor)
 
-            if ticks.isEmpty {
-                VStack {
-                    Spacer()
-                    Text(isLive ? "Waiting for the agent to start…" : "No messages yet.")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundColor(inkColor.opacity(0.6))
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 12)
-                .background(caseParchment.overlay(NotebookLinesOverlay()))
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 8) {
-                            ForEach(ticks) { tick in
-                                SolverTickBubble(tick: tick)
-                                    .id(tick.id)
-                            }
-                        }
-                        .padding(12)
+            if selectedTab == .caseNotes {
+                if isLive, let lastTick = ticks.last?.tick {
+                    HStack {
+                        Spacer()
+                        Text("TICK \(lastTick)/\(solverMaxTicks)")
+                            .font(.system(size: 10, weight: .heavy, design: .rounded))
+                            .foregroundColor(inkColor.opacity(0.7))
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(caseParchment)
+                }
+
+                if ticks.isEmpty {
+                    VStack {
+                        Spacer()
+                        Text(isLive ? "Waiting for the agent to start…" : "No messages yet.")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(inkColor.opacity(0.6))
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 12)
                     .background(caseParchment.overlay(NotebookLinesOverlay()))
-                    .onChange(of: ticks.count) { _, _ in
-                        if let last = ticks.last {
-                            withAnimation(.easeOut(duration: 0.25)) {
-                                proxy.scrollTo(last.id, anchor: .bottom)
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 8) {
+                                ForEach(ticks) { tick in
+                                    SolverTickBubble(tick: tick)
+                                        .id(tick.id)
+                                }
+                            }
+                            .padding(12)
+                        }
+                        .background(caseParchment.overlay(NotebookLinesOverlay()))
+                        .onChange(of: ticks.count) { _, _ in
+                            if let last = ticks.last {
+                                withAnimation(.easeOut(duration: 0.25)) {
+                                    proxy.scrollTo(last.id, anchor: .bottom)
+                                }
                             }
                         }
                     }
                 }
+            } else {
+                ClueBoardView(storyboard: storyboard, ticks: ticks)
+                    .background(caseParchment.overlay(NotebookLinesOverlay()))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+// MARK: - Clue board (suspects + evidence log)
+
+private struct ClueBoardView: View {
+    let storyboard: Storyboard?
+    let ticks: [SolverTickEvent]
+
+    private let inkColor = Color(red: 0.25, green: 0.22, blue: 0.18)
+    private let amber = Color(red: 0.74, green: 0.55, blue: 0.16)
+
+    /// All milestone tokens unlocked so far, in the order they were discovered.
+    private var evidence: [String] {
+        ticks.flatMap { $0.newMilestones ?? [] }
+    }
+
+    /// True once the proof object has been picked up or examined.
+    private var proofFound: Bool {
+        guard let proofObjectId = storyboard?.mystery?.proofObjectId, !proofObjectId.isEmpty else { return false }
+        return evidence.contains { $0.hasSuffix(":\(proofObjectId)") }
+    }
+
+    private var suspects: [Suspect] {
+        storyboard?.suspects ?? []
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                // Mystery status
+                HStack(spacing: 7) {
+                    Circle()
+                        .fill(proofFound ? amber : inkColor.opacity(0.4))
+                        .frame(width: 7, height: 7)
+
+                    Text(proofFound ? "Proof found — make your accusation" : "Investigating…")
+                        .font(.system(size: 11, weight: .heavy, design: .rounded))
+                        .foregroundColor(proofFound ? amber : inkColor.opacity(0.7))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(proofFound ? amber.opacity(0.12) : inkColor.opacity(0.05))
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(proofFound ? amber.opacity(0.3) : inkColor.opacity(0.12)))
+                )
+
+                // Suspects
+                if !suspects.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("SUSPECTS")
+                            .font(.system(size: 11, weight: .heavy, design: .rounded))
+                            .foregroundColor(inkColor)
+
+                        VStack(spacing: 6) {
+                            ForEach(suspects) { suspect in
+                                SuspectCard(suspect: suspect)
+                            }
+                        }
+                    }
+                }
+
+                // Evidence log
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Text("EVIDENCE")
+                            .font(.system(size: 11, weight: .heavy, design: .rounded))
+                            .foregroundColor(inkColor)
+
+                        if !evidence.isEmpty {
+                            Text("\(evidence.count)")
+                                .font(.system(size: 9, weight: .heavy, design: .rounded))
+                                .foregroundColor(Color(red: 0.96, green: 0.93, blue: 0.84))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(inkColor.opacity(0.6)))
+                        }
+                    }
+
+                    if evidence.isEmpty {
+                        Text("No evidence collected yet.")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(inkColor.opacity(0.6))
+                    } else {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(evidence.enumerated()), id: \.offset) { _, token in
+                                let isProof = storyboard?.mystery?.proofObjectId.map { token.hasSuffix(":\($0)") } ?? false
+                                EvidenceRow(text: humanizeMilestone(token), isProof: isProof)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(12)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct SuspectCard: View {
+    let suspect: Suspect
+
+    private let inkColor = Color(red: 0.25, green: 0.22, blue: 0.18)
+    private let folderColor = Color(red: 0.78, green: 0.64, blue: 0.42)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(suspect.name)
+                .font(.system(size: 12, weight: .heavy, design: .rounded))
+                .foregroundColor(inkColor)
+
+            if let connection = suspect.connectionToVictim, !connection.isEmpty {
+                Text(connection)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(inkColor.opacity(0.7))
+            }
+
+            if let motive = suspect.apparentMotive, !motive.isEmpty {
+                HStack(spacing: 4) {
+                    Text("MOTIVE")
+                        .font(.system(size: 9, weight: .heavy, design: .rounded))
+                        .foregroundColor(Color(red: 0.62, green: 0.45, blue: 0.10))
+
+                    Text(motive)
+                        .font(.system(size: 11, design: .monospaced).italic())
+                        .foregroundColor(Color(red: 0.62, green: 0.45, blue: 0.10))
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(folderColor.opacity(0.18))
+        )
+    }
+}
+
+private struct EvidenceRow: View {
+    let text: String
+    var isProof: Bool = false
+
+    private let inkColor = Color(red: 0.25, green: 0.22, blue: 0.18)
+    private let red = Color(red: 0.74, green: 0.14, blue: 0.12)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if isProof {
+                Text("KEY EVIDENCE")
+                    .font(.system(size: 9, weight: .heavy, design: .rounded))
+                    .foregroundColor(red)
+            }
+
+            Text(text)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(inkColor)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isProof ? red.opacity(0.08) : inkColor.opacity(0.04))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(isProof ? red.opacity(0.3) : Color.clear))
+        )
     }
 }
 
@@ -1437,8 +1635,8 @@ private struct SavedRunCard: View {
 
                 if let solver = run.solver {
                     Label(
-                        solver.won ? "Won · \(Int(solver.efficiency * 100))%" : "Lost",
-                        systemImage: solver.won ? "checkmark.seal.fill" : "xmark.seal.fill"
+                        solver.won ? "Won · \(Int(solver.efficiency * 100))%" : (solver.wrongDeduction ? "Wrong suspect" : "Lost"),
+                        systemImage: solver.won ? "checkmark.seal.fill" : (solver.wrongDeduction ? "person.fill.xmark" : "xmark.seal.fill")
                     )
                     .font(.system(size: 11, weight: .heavy, design: .rounded))
                     .foregroundColor(solver.won ? Color(red: 0.18, green: 0.48, blue: 0.22) : Color(red: 0.55, green: 0.18, blue: 0.12))
