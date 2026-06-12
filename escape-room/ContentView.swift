@@ -603,6 +603,10 @@ private struct GameView: View {
 
             ZStack {
                 VStack(spacing: 1) {
+                    if isLive, let liveMessage, !liveMessage.isEmpty {
+                        ProgressBanner(message: liveMessage)
+                    }
+
                     if isWide {
                         HStack(spacing: 1) {
                             DungeonMapView(world: world)
@@ -652,6 +656,40 @@ private struct GameView: View {
     }
 }
 
+// MARK: - Progress banner (live solver status, shown above the map)
+
+private struct ProgressBanner: View {
+    let message: String
+
+    private let inkColor = Color(red: 0.25, green: 0.22, blue: 0.18)
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("🔔")
+                .font(.system(size: 13))
+
+            Text("Progress!")
+                .font(.system(size: 13, weight: .heavy, design: .rounded))
+                .foregroundColor(WoodTheme.leaf)
+
+            Text(message)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(inkColor.opacity(0.85))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .transition(.opacity)
+                .id(message)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(WoodTheme.leaf.opacity(0.12))
+        .overlay(Rectangle().frame(height: 1).foregroundColor(WoodTheme.leaf.opacity(0.25)), alignment: .bottom)
+    }
+}
+
 // MARK: - Narration banner (opening story beat)
 
 private struct NarrationBanner: View {
@@ -669,10 +707,17 @@ private struct NarrationBanner: View {
                     .font(.system(size: 12, weight: .heavy, design: .monospaced))
                     .foregroundColor(Color(red: 0.74, green: 0.14, blue: 0.12).opacity(0.7))
 
-                Text(text)
-                    .font(.system(size: 15, design: .serif).italic())
-                    .foregroundColor(Color(red: 0.25, green: 0.22, blue: 0.18))
-                    .multilineTextAlignment(.center)
+                VStack(spacing: 4) {
+                    Text("NARRATOR")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .tracking(1.5)
+                        .foregroundColor(Color(red: 0.25, green: 0.22, blue: 0.18).opacity(0.4))
+
+                    Text(text)
+                        .font(.system(size: 15, design: .serif).italic())
+                        .foregroundColor(Color(red: 0.25, green: 0.22, blue: 0.18))
+                        .multilineTextAlignment(.center)
+                }
 
                 Button(action: onDismiss) {
                     Text("BEGIN")
@@ -746,10 +791,17 @@ private struct GameOverPopupView: View {
                     .multilineTextAlignment(.center)
 
                 if let narration, !narration.isEmpty {
-                    Text(narration)
-                        .font(.system(size: 13, design: .serif).italic())
-                        .foregroundColor(inkColor)
-                        .multilineTextAlignment(.center)
+                    VStack(spacing: 4) {
+                        Text("NARRATOR")
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .tracking(1.5)
+                            .foregroundColor(inkColor.opacity(0.4))
+
+                        Text(narration)
+                            .font(.system(size: 13, design: .serif).italic())
+                            .foregroundColor(inkColor)
+                            .multilineTextAlignment(.center)
+                    }
                 }
 
                 HStack(spacing: 18) {
