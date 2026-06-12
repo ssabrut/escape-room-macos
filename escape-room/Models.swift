@@ -75,6 +75,14 @@ struct GenerateResponse: Codable {
     let render: RenderWorld
     let sprites: [String: String]?  // objectId → base64 PNG
     let solver: SolverLog?
+    let narrationOpening: String?
+    let narrationEnding: String?
+
+    enum CodingKeys: String, CodingKey {
+        case render, sprites, solver
+        case narrationOpening = "narration_opening"
+        case narrationEnding = "narration_ending"
+    }
 }
 
 // MARK: - /generate/solve response (live-solve a loaded world)
@@ -83,10 +91,12 @@ struct SolveResponse: Codable {
     let render: RenderWorld
     let solutionPath: [String]
     let solver: SolverLog?
+    let narrationEnding: String?
 
     enum CodingKeys: String, CodingKey {
         case render, solver
         case solutionPath = "solution_path"
+        case narrationEnding = "narration_ending"
     }
 }
 
@@ -131,6 +141,7 @@ struct StreamEvent: Codable {
     let current: Int?
     let total: Int?
     let detail: String?
+    let text: String?  // narration events: opening/ending prose
 }
 
 // MARK: - Streaming solver tick events
@@ -151,6 +162,7 @@ struct SolverTickEvent: Codable, Identifiable {
     let newMilestones: [String]?
     let gatesFired: [String]?
     let render: RenderWorld?
+    let narration: String?
 
     struct PrevOutcome: Codable {
         let action: String?
@@ -159,7 +171,7 @@ struct SolverTickEvent: Codable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case type, tick, room, thought, plan, render
+        case type, tick, room, thought, plan, render, narration
         case agentId = "agent_id"
         case finalAction = "final_action"
         case currentGoal = "current_goal"

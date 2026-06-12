@@ -7,6 +7,9 @@
 
 import SwiftUI
 import Combine
+#if os(macOS)
+import AppKit
+#endif
 
 // MARK: - ViewModel
 
@@ -22,12 +25,20 @@ final class EscapeRoomViewModel: ObservableObject {
     @Published var spriteETA: TimeInterval?
     @Published var solverTicks: [SolverTickEvent] = []
     @Published var solverResult: SolverLog?
+    @Published var narrationOpening: String?
+    @Published var narrationEnding: String?
 
     @Published var savedRuns: [SavedRunSummary] = []
     @Published var isLoadingRuns = false
     @Published var runsErrorMessage: String?
 
+    /// True once a live solve has been started for the current world (via
+    /// `beginSolving`), so the UI knows to stop showing the "Begin" prompt.
+    @Published var hasStartedSolving = false
+
     private var spriteStageStart: Date?
+    private var pendingWorldDict: Any?
+    private var pendingStoryboardDict: Any?
 
     private static let apiKey = "84beec4c-8d7d-44fa-be4d-15ff630b8fa8"
     private let baseURL = URL(string: "http://127.0.0.1:8000")!
@@ -56,13 +67,18 @@ final class EscapeRoomViewModel: ObservableObject {
         spriteStageStart = nil
         solverTicks = []
         solverResult = nil
+        narrationOpening = nil
+        narrationEnding = nil
+        hasStartedSolving = false
+        pendingWorldDict = nil
+        pendingStoryboardDict = nil
 
         var request = URLRequest(url: baseURL.appendingPathComponent("generate"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
         request.setValue(Self.apiKey, forHTTPHeaderField: "X-API-Key")
-        let body: [String: Any] = ["theme": theme, "hard_mode": hardMode, "num_rooms": numRooms, "num_agents": numAgents, "solve": true]
+        let body: [String: Any] = ["theme": theme, "hard_mode": hardMode, "num_rooms": numRooms, "num_agents": numAgents, "solve": false]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
@@ -88,11 +104,24 @@ final class EscapeRoomViewModel: ObservableObject {
                             world = render
                         }
                     }
+                case "narration":
+                    if event.stage == "opening" {
+                        narrationOpening = event.text
+                    } else if event.stage == "ending" {
+                        narrationEnding = event.text
+                    }
                 case "done":
                     let response = try JSONDecoder().decode(GenerateResponse.self, from: lineData)
                     if let sprites = response.sprites { SpriteCache.shared.load(sprites: sprites) }
                     world = response.render
                     solverResult = response.solver
+                    if let opening = response.narrationOpening { narrationOpening = opening }
+                    if let ending = response.narrationEnding { narrationEnding = ending }
+
+                    if let lineObject = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] {
+                        pendingWorldDict = lineObject["world"]
+                        pendingStoryboardDict = lineObject["storyboard"]
+                    }
                     sawDone = true
                 case "error":
                     errorMessage = event.detail ?? "Unknown error"
@@ -161,40 +190,51 @@ final class EscapeRoomViewModel: ObservableObject {
         isLoadingRuns = false
     }
 
-    /// Loads a previously generated world by filename and starts a live solve.
+    /// Loads a previously generated world by filename. The live solve is
+    /// deferred until the player taps "Begin" (see `beginSolving`), so the
+    /// narrator overlay has a chance to show first — same as `generate()`.
     func loadSavedRun(filename: String, numAgents: Int = 1) async {
         errorMessage = nil
         solverTicks = []
         solverResult = nil
+        narrationOpening = nil
+        narrationEnding = nil
+        hasStartedSolving = false
+        pendingWorldDict = nil
+        pendingStoryboardDict = nil
 
         var request = URLRequest(url: baseURL.appendingPathComponent("generate/runs/\(filename)"))
         request.setValue(Self.apiKey, forHTTPHeaderField: "X-API-Key")
 
-        let worldDict: Any?
         do {
             let (data, _) = try await session.data(for: request)
             let response = try JSONDecoder().decode(GenerateResponse.self, from: data)
             if let sprites = response.sprites { SpriteCache.shared.load(sprites: sprites) }
             world = response.render
-            solverResult = response.solver
+            narrationOpening = response.narrationOpening
 
             let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            worldDict = raw?["world"]
+            pendingWorldDict = raw?["world"]
+            pendingStoryboardDict = raw?["storyboard"]
         } catch {
             errorMessage = "Failed to load run: \(error.localizedDescription)"
+        }
+    }
+
+    /// Starts the live solve for the world produced by the last `generate()`
+    /// call. Used by the "Begin" prompt so generation and solving are two
+    /// distinct steps from the player's perspective.
+    func beginSolving(numAgents: Int = 1) async {
+        guard let worldDict = pendingWorldDict, JSONSerialization.isValidJSONObject(worldDict) else {
             return
         }
-
-        guard let worldDict, JSONSerialization.isValidJSONObject(worldDict) else {
-            return
-        }
-
-        await solveLoadedWorld(worldDict, numAgents: numAgents)
+        hasStartedSolving = true
+        await solveLoadedWorld(worldDict, storyboard: pendingStoryboardDict, numAgents: numAgents)
     }
 
     /// Streams the solver's live ticks for an already-built world (loaded
     /// from JSON), reusing the same NDJSON event shapes as `/generate`.
-    private func solveLoadedWorld(_ worldDict: Any, numAgents: Int = 1) async {
+    private func solveLoadedWorld(_ worldDict: Any, storyboard: Any? = nil, numAgents: Int = 1) async {
         isLoading = true
         progressMessage = "Starting up…"
         startedAt = Date()
@@ -204,7 +244,11 @@ final class EscapeRoomViewModel: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
         request.setValue(Self.apiKey, forHTTPHeaderField: "X-API-Key")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["world": worldDict, "num_agents": numAgents])
+        var body: [String: Any] = ["world": worldDict, "num_agents": numAgents]
+        if let storyboard, JSONSerialization.isValidJSONObject(storyboard) {
+            body["storyboard"] = storyboard
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
             let (bytes, _) = try await session.bytes(for: request)
@@ -224,10 +268,15 @@ final class EscapeRoomViewModel: ObservableObject {
                             world = render
                         }
                     }
+                case "narration":
+                    if event.stage == "ending" {
+                        narrationEnding = event.text
+                    }
                 case "done":
                     let response = try JSONDecoder().decode(SolveResponse.self, from: lineData)
                     world = response.render
                     solverResult = response.solver
+                    if let ending = response.narrationEnding { narrationEnding = ending }
                     sawDone = true
                 case "error":
                     errorMessage = event.detail ?? "Unknown error"
@@ -249,20 +298,10 @@ final class EscapeRoomViewModel: ObservableObject {
     }
 }
 
-// MARK: - Theme list
+// MARK: - Theme
 
-private let themes = [
-    "Haunted House",
-    "Murder Mystery",
-    "Prison Break",
-    "Pirate Adventure",
-    "Bank Robbery",
-    "Cosmic Crisis",
-    "Treasure Hunt",
-    "Zombie Apocalypse",
-    "Secret Agents and Spies",
-    "Horror",
-]
+/// The app currently focuses on a single case file: a murder mystery.
+private let gameTheme = "Murder Mystery"
 
 // MARK: - Start mode
 
@@ -273,14 +312,13 @@ private enum StartMode {
 // MARK: - App screen
 
 private enum AppScreen {
-    case mainMenu, start
+    case mainMenu, start, settings, credits
 }
 
 // MARK: - Root view
 
 struct ContentView: View {
     @StateObject private var vm = EscapeRoomViewModel()
-    @State private var selectedTheme = themes[0]
     @State private var numRooms = 3
     @State private var hardMode = true
     @State private var numAgents = 1
@@ -291,7 +329,19 @@ struct ContentView: View {
         NavigationStack {
             Group {
                 if let world = vm.world {
-                    GameView(world: world, ticks: vm.solverTicks, isLive: vm.isLoading, liveMessage: vm.progressMessage, result: vm.solverResult)
+                    GameView(
+                        world: world,
+                        ticks: vm.solverTicks,
+                        isLive: vm.isLoading,
+                        liveMessage: vm.progressMessage,
+                        result: vm.solverResult,
+                        narrationOpening: vm.narrationOpening,
+                        narrationEnding: vm.narrationEnding,
+                        hasStartedSolving: vm.hasStartedSolving,
+                        onBegin: {
+                            Task { await vm.beginSolving(numAgents: numAgents) }
+                        }
+                    )
                         .overlay(alignment: .top) {
                             if let error = vm.errorMessage {
                                 ErrorBanner(message: error) {
@@ -306,16 +356,16 @@ struct ContentView: View {
                     LoadingView(liveMessage: vm.progressMessage, startedAt: vm.startedAt, eta: vm.spriteETA)
                 } else if let error = vm.errorMessage {
                     ZStack {
-                        SkyBackground()
+                        CaseDeskBackground()
 
                         VStack(spacing: 16) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.largeTitle)
-                                .foregroundColor(Color(red: 0.55, green: 0.18, blue: 0.12))
+                                .foregroundColor(Color(red: 0.74, green: 0.14, blue: 0.12))
 
                             Text(error)
                                 .font(.system(size: 13, design: .monospaced))
-                                .foregroundColor(WoodTheme.frameDark)
+                                .foregroundColor(Color(red: 0.25, green: 0.22, blue: 0.18))
                                 .multilineTextAlignment(.center)
 
                             Button {
@@ -337,8 +387,8 @@ struct ContentView: View {
                         .padding(20)
                         .background(
                             RoundedRectangle(cornerRadius: 14)
-                                .fill(WoodTheme.parchment)
-                                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(WoodTheme.frame, lineWidth: 4))
+                                .fill(Color(red: 0.96, green: 0.93, blue: 0.84))
+                                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color(red: 0.78, green: 0.64, blue: 0.42), lineWidth: 4))
                         )
                         .padding(.horizontal, 32)
                         .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 6)
@@ -353,12 +403,26 @@ struct ContentView: View {
                         onLoadGame: {
                             startMode = .loadJSON
                             screen = .start
+                        },
+                        onSettings: {
+                            screen = .settings
+                        },
+                        onCredits: {
+                            screen = .credits
+                        },
+                        onExit: {
+                            #if os(macOS)
+                            NSApplication.shared.terminate(nil)
+                            #endif
                         }
                     )
+                } else if screen == .settings {
+                    SettingsView(onBack: { screen = .mainMenu })
+                } else if screen == .credits {
+                    CreditsView(onBack: { screen = .mainMenu })
                 } else {
                     StartView(
                         startMode: $startMode,
-                        selectedTheme: $selectedTheme,
                         numRooms: $numRooms,
                         hardMode: $hardMode,
                         numAgents: $numAgents,
@@ -366,7 +430,7 @@ struct ContentView: View {
                         isLoadingRuns: vm.isLoadingRuns,
                         runsErrorMessage: vm.runsErrorMessage,
                         onGenerate: {
-                            Task { await vm.generate(theme: selectedTheme, hardMode: hardMode, numRooms: numRooms, numAgents: numAgents) }
+                            Task { await vm.generate(theme: gameTheme, hardMode: hardMode, numRooms: numRooms, numAgents: numAgents) }
                         },
                         onRefreshRuns: {
                             Task { await vm.fetchSavedRuns() }
@@ -440,9 +504,11 @@ private struct LoadingView: View {
         return String(format: "%d:%02d", minutes, seconds)
     }
 
+    private let inkColor = Color(red: 0.25, green: 0.22, blue: 0.18)
+
     var body: some View {
         ZStack {
-            SkyBackground()
+            CaseDeskBackground()
 
             VStack(spacing: 28) {
                 ZStack {
@@ -453,27 +519,26 @@ private struct LoadingView: View {
 
                     Circle()
                         .trim(from: 0, to: 0.25)
-                        .stroke(WoodTheme.title, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                        .stroke(Color(red: 0.74, green: 0.14, blue: 0.12), style: StrokeStyle(lineWidth: 6, lineCap: .round))
                         .frame(width: 96, height: 96)
                         .rotationEffect(.degrees(spin ? 360 : 0))
                         .animation(.linear(duration: 1.2).repeatForever(autoreverses: false), value: spin)
 
-                    Image(systemName: "wand.and.stars")
+                    Image(systemName: "magnifyingglass")
                         .font(.system(size: 32))
-                        .foregroundColor(WoodTheme.leaf)
+                        .foregroundColor(inkColor)
                         .scaleEffect(pulse ? 1.15 : 0.9)
                         .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
                 }
 
                 VStack(spacing: 10) {
-                    Text("GENERATING WORLD")
+                    Text("BUILDING CASE FILE")
                         .font(.system(size: 18, weight: .black, design: .rounded))
-                        .foregroundColor(WoodTheme.title)
-                        .shadow(color: Color(red: 0.30, green: 0.15, blue: 0.05), radius: 0, x: 1, y: 1)
+                        .foregroundColor(Color(red: 0.74, green: 0.14, blue: 0.12))
 
                     Text(displayMessage)
                         .font(.system(size: 13, design: .monospaced))
-                        .foregroundColor(WoodTheme.parchment)
+                        .foregroundColor(inkColor)
                         .frame(height: 18)
                         .transition(.opacity)
                         .id(displayMessage)
@@ -483,7 +548,7 @@ private struct LoadingView: View {
                     if let timingLine {
                         Text(timingLine)
                             .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(WoodTheme.parchment.opacity(0.7))
+                            .foregroundColor(inkColor.opacity(0.6))
                     }
                 }
                 .padding(.horizontal, 24)
@@ -491,8 +556,8 @@ private struct LoadingView: View {
                 .frame(minWidth: 260)
                 .background(
                     RoundedRectangle(cornerRadius: 14)
-                        .fill(WoodTheme.frame)
-                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(WoodTheme.frameDark, lineWidth: 4))
+                        .fill(Color(red: 0.96, green: 0.93, blue: 0.84))
+                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color(red: 0.78, green: 0.64, blue: 0.42), lineWidth: 4))
                 )
                 .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 6)
             }
@@ -524,8 +589,13 @@ private struct GameView: View {
     var isLive: Bool = false
     var liveMessage: String? = nil
     var result: SolverLog? = nil
+    var narrationOpening: String? = nil
+    var narrationEnding: String? = nil
+    var hasStartedSolving: Bool = true
+    var onBegin: () -> Void = {}
 
     @State private var showResult = false
+    @State private var showBegin = true
 
     var body: some View {
         GeometryReader { geo in
@@ -555,8 +625,17 @@ private struct GameView: View {
                 }
                 .background(WoodTheme.frameDark)
 
+                if showBegin, !hasStartedSolving {
+                    NarrationBanner(text: narrationOpening ?? "The case file is ready. Begin when you are.") {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            showBegin = false
+                        }
+                        onBegin()
+                    }
+                }
+
                 if showResult, let result {
-                    GameOverPopupView(result: result) {
+                    GameOverPopupView(result: result, narration: narrationEnding) {
                         withAnimation(.easeOut(duration: 0.2)) {
                             showResult = false
                         }
@@ -573,11 +652,65 @@ private struct GameView: View {
     }
 }
 
+// MARK: - Narration banner (opening story beat)
+
+private struct NarrationBanner: View {
+    let text: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture(perform: onDismiss)
+
+            VStack(spacing: 14) {
+                Text("THE CASE BEGINS")
+                    .font(.system(size: 12, weight: .heavy, design: .monospaced))
+                    .foregroundColor(Color(red: 0.74, green: 0.14, blue: 0.12).opacity(0.7))
+
+                Text(text)
+                    .font(.system(size: 15, design: .serif).italic())
+                    .foregroundColor(Color(red: 0.25, green: 0.22, blue: 0.18))
+                    .multilineTextAlignment(.center)
+
+                Button(action: onDismiss) {
+                    Text("BEGIN")
+                        .font(.system(size: 14, weight: .heavy, design: .rounded))
+                        .foregroundColor(WoodTheme.title)
+                        .padding(.horizontal, 28)
+                        .padding(.vertical, 10)
+                        .background(
+                            Capsule()
+                                .fill(WoodTheme.frame)
+                                .overlay(Capsule().strokeBorder(WoodTheme.frameDark, lineWidth: 3))
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(24)
+            .frame(maxWidth: 360)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color(red: 0.96, green: 0.93, blue: 0.84))
+                    .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color(red: 0.78, green: 0.64, blue: 0.42), lineWidth: 4))
+            )
+            .shadow(color: .black.opacity(0.4), radius: 12, x: 0, y: 8)
+            .transition(.scale.combined(with: .opacity))
+            .padding(.horizontal, 24)
+        }
+    }
+}
+
 // MARK: - Game over popup
 
 private struct GameOverPopupView: View {
     let result: SolverLog
+    var narration: String? = nil
     let onDismiss: () -> Void
+
+    private let inkColor = Color(red: 0.25, green: 0.22, blue: 0.18)
+    private let stampColor = Color(red: 0.74, green: 0.14, blue: 0.12)
 
     var body: some View {
         ZStack {
@@ -586,21 +719,38 @@ private struct GameOverPopupView: View {
                 .onTapGesture(perform: onDismiss)
 
             VStack(spacing: 14) {
+                Text(result.won ? "CASE CLOSED" : "CASE COLD")
+                    .font(.system(size: 12, weight: .heavy, design: .monospaced))
+                    .foregroundColor(stampColor.opacity(0.7))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 3)
+                            .strokeBorder(stampColor.opacity(0.6), lineWidth: 1.5)
+                    )
+                    .rotationEffect(.degrees(-3))
+
                 Image(systemName: result.won ? "door.left.hand.open" : "lock.fill")
                     .font(.system(size: 40))
-                    .foregroundColor(result.won ? WoodTheme.leaf : WoodTheme.ink)
+                    .foregroundColor(result.won ? Color(red: 0.18, green: 0.48, blue: 0.22) : stampColor)
 
                 Text(result.won ? "AGENT ESCAPED!" : "AGENT TRAPPED")
                     .font(.system(size: 22, weight: .black, design: .rounded))
-                    .foregroundColor(WoodTheme.title)
-                    .shadow(color: Color(red: 0.30, green: 0.15, blue: 0.05), radius: 0, x: 1, y: 1)
+                    .foregroundColor(stampColor)
 
                 Text(result.won
                      ? "The agent found a way out in \(result.ticks) ticks."
                      : "The agent got stuck after \(result.ticks) ticks.")
                     .font(.system(size: 13, design: .monospaced))
-                    .foregroundColor(WoodTheme.parchment)
+                    .foregroundColor(inkColor)
                     .multilineTextAlignment(.center)
+
+                if let narration, !narration.isEmpty {
+                    Text(narration)
+                        .font(.system(size: 13, design: .serif).italic())
+                        .foregroundColor(inkColor)
+                        .multilineTextAlignment(.center)
+                }
 
                 HStack(spacing: 18) {
                     statColumn(title: "OPTIMAL", value: "\(result.optimal)")
@@ -627,8 +777,8 @@ private struct GameOverPopupView: View {
             .frame(maxWidth: 320)
             .background(
                 RoundedRectangle(cornerRadius: 16)
-                    .fill(WoodTheme.frame)
-                    .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(WoodTheme.frameDark, lineWidth: 4))
+                    .fill(Color(red: 0.96, green: 0.93, blue: 0.84))
+                    .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color(red: 0.78, green: 0.64, blue: 0.42), lineWidth: 4))
             )
             .shadow(color: .black.opacity(0.4), radius: 12, x: 0, y: 8)
             .transition(.scale.combined(with: .opacity))
@@ -639,10 +789,10 @@ private struct GameOverPopupView: View {
         VStack(spacing: 2) {
             Text(value)
                 .font(.system(size: 16, weight: .heavy, design: .rounded))
-                .foregroundColor(WoodTheme.title)
+                .foregroundColor(inkColor)
             Text(title)
                 .font(.system(size: 9, weight: .bold, design: .rounded))
-                .foregroundColor(WoodTheme.parchment.opacity(0.7))
+                .foregroundColor(inkColor.opacity(0.6))
         }
     }
 }
@@ -698,16 +848,20 @@ private struct AgentConversationView: View {
 
     @State private var pulse = false
 
+    private let folderColor = Color(red: 0.78, green: 0.64, blue: 0.42)
+    private let caseParchment = Color(red: 0.96, green: 0.93, blue: 0.84)
+    private let inkColor = Color(red: 0.25, green: 0.22, blue: 0.18)
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                Text("AGENT CONVERSATION")
+                Text("CASE NOTES")
                     .font(.system(size: 11, weight: .heavy, design: .rounded))
-                    .foregroundColor(WoodTheme.title)
+                    .foregroundColor(inkColor)
 
                 if isLive {
                     Circle()
-                        .fill(Color(red: 0.85, green: 0.25, blue: 0.20))
+                        .fill(Color(red: 0.74, green: 0.14, blue: 0.12))
                         .frame(width: 7, height: 7)
                         .opacity(pulse ? 1.0 : 0.35)
                         .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
@@ -715,7 +869,7 @@ private struct AgentConversationView: View {
 
                     Text("LIVE")
                         .font(.system(size: 10, weight: .heavy, design: .rounded))
-                        .foregroundColor(Color(red: 0.85, green: 0.25, blue: 0.20))
+                        .foregroundColor(Color(red: 0.74, green: 0.14, blue: 0.12))
                 }
 
                 Spacer()
@@ -723,26 +877,26 @@ private struct AgentConversationView: View {
                 if isLive, let lastTick = ticks.last?.tick {
                     Text("TICK \(lastTick)/\(solverMaxTicks)")
                         .font(.system(size: 10, weight: .heavy, design: .rounded))
-                        .foregroundColor(WoodTheme.title.opacity(0.8))
+                        .foregroundColor(inkColor.opacity(0.7))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(WoodTheme.frame)
+            .background(folderColor)
 
             if ticks.isEmpty {
                 VStack {
                     Spacer()
                     Text(isLive ? "Waiting for the agent to start…" : "No messages yet.")
                         .font(.system(size: 12, design: .monospaced))
-                        .foregroundColor(WoodTheme.frameDark.opacity(0.6))
+                        .foregroundColor(inkColor.opacity(0.6))
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
-                .background(WoodTheme.parchment)
+                .background(caseParchment.overlay(NotebookLinesOverlay()))
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -754,7 +908,7 @@ private struct AgentConversationView: View {
                         }
                         .padding(12)
                     }
-                    .background(WoodTheme.parchment)
+                    .background(caseParchment.overlay(NotebookLinesOverlay()))
                     .onChange(of: ticks.count) { _, _ in
                         if let last = ticks.last {
                             withAnimation(.easeOut(duration: 0.25)) {
@@ -774,6 +928,9 @@ private struct AgentConversationView: View {
 private struct SolverTickBubble: View {
     let tick: SolverTickEvent
 
+    private let inkColor = Color(red: 0.25, green: 0.22, blue: 0.18)
+    private let folderColor = Color(red: 0.78, green: 0.64, blue: 0.42)
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 5) {
@@ -785,7 +942,13 @@ private struct SolverTickBubble: View {
 
                 Text("Tick \(tick.tick) · \(tick.room)")
                     .font(.system(size: 10, weight: .heavy, design: .rounded))
-                    .foregroundColor(WoodTheme.frameDark.opacity(0.6))
+                    .foregroundColor(inkColor.opacity(0.6))
+            }
+
+            if let narration = tick.narration, !narration.isEmpty {
+                Text(narration)
+                    .font(.system(size: 13, design: .serif).italic())
+                    .foregroundColor(Color(red: 0.45, green: 0.12, blue: 0.45))
             }
 
             if let outcome = tick.prevOutcome, let action = outcome.action {
@@ -798,13 +961,13 @@ private struct SolverTickBubble: View {
             if let thought = tick.thought, !thought.isEmpty {
                 Text(thought)
                     .font(.system(size: 12, design: .monospaced).italic())
-                    .foregroundColor(WoodTheme.frameDark)
+                    .foregroundColor(inkColor)
             }
 
             if let plan = tick.plan, !plan.isEmpty {
                 Text("Plan: \(plan)")
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(WoodTheme.frameDark.opacity(0.75))
+                    .foregroundColor(inkColor.opacity(0.75))
             }
 
             if let action = tick.finalAction {
@@ -818,7 +981,7 @@ private struct SolverTickBubble: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(WoodTheme.frame.opacity(0.12))
+                .fill(folderColor.opacity(0.18))
         )
     }
 }
@@ -828,12 +991,16 @@ private struct SolverTickBubble: View {
 private struct ObjectiveBarView: View {
     let world: RenderWorld
 
+    private let inkColor = Color(red: 0.25, green: 0.22, blue: 0.18)
+    private let folderColor = Color(red: 0.78, green: 0.64, blue: 0.42)
+    private let caseParchment = Color(red: 0.96, green: 0.93, blue: 0.84)
+
     var body: some View {
         VStack(spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
                 Text("OBJECTIVE")
                     .font(.system(size: 11, weight: .heavy, design: .rounded))
-                    .foregroundColor(WoodTheme.frameDark)
+                    .foregroundColor(inkColor)
 
                 Text("Explore the rooms and find a way out.")
                     .font(.system(size: 13, design: .monospaced))
@@ -842,7 +1009,7 @@ private struct ObjectiveBarView: View {
                 Spacer()
             }
 
-            Divider().background(WoodTheme.frame.opacity(0.4))
+            Divider().background(folderColor.opacity(0.4))
 
             let parties = world.parties ?? [world.party]
 
@@ -852,8 +1019,145 @@ private struct ObjectiveBarView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(WoodTheme.parchment)
-        .overlay(Rectangle().frame(height: 3).foregroundColor(WoodTheme.frame), alignment: .top)
+        .background(caseParchment)
+        .overlay(Rectangle().frame(height: 3).foregroundColor(folderColor), alignment: .top)
+    }
+}
+
+// MARK: - Settings screen
+
+private struct SettingsView: View {
+    let onBack: () -> Void
+
+    @StateObject private var audio = AudioManager.shared
+
+    var body: some View {
+        ZStack {
+            CaseDeskBackground()
+
+            VStack(spacing: 20) {
+                CaseFileHeader(title: "SETTINGS", onBack: onBack)
+
+                CaseFilePanel {
+                    HStack {
+                        Text("Music")
+                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .foregroundColor(Color(red: 0.25, green: 0.22, blue: 0.18))
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { !audio.isMuted },
+                            set: { audio.isMuted = !$0 }
+                        ))
+                        .labelsHidden()
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                }
+                .frame(maxWidth: 480)
+
+                Spacer()
+            }
+            .padding(.top, 24)
+            .padding(.horizontal, 24)
+        }
+        .ignoresSafeArea()
+    }
+}
+
+// MARK: - Credits screen
+
+private struct CreditsView: View {
+    let onBack: () -> Void
+
+    private let credits: [(role: String, name: String)] = [
+        ("Design & Development", "Michael Eko"),
+        ("World Generation", "escape_rooms engine"),
+        ("Music & Sound", "AudioManager"),
+    ]
+
+    var body: some View {
+        ZStack {
+            CaseDeskBackground()
+
+            VStack(spacing: 20) {
+                CaseFileHeader(title: "CREDITS", onBack: onBack)
+
+                CaseFilePanel {
+                    VStack(spacing: 0) {
+                        ForEach(credits.indices, id: \.self) { i in
+                            HStack {
+                                Text(credits[i].role)
+                                    .font(.system(size: 13, design: .monospaced))
+                                    .foregroundColor(Color(red: 0.25, green: 0.22, blue: 0.18).opacity(0.7))
+                                Spacer()
+                                Text(credits[i].name)
+                                    .font(.system(size: 14, weight: .heavy, design: .rounded))
+                                    .foregroundColor(Color(red: 0.25, green: 0.22, blue: 0.18))
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+
+                            if i != credits.count - 1 {
+                                Divider().background(Color(red: 0.55, green: 0.50, blue: 0.42).opacity(0.3))
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: 480)
+
+                Spacer()
+            }
+            .padding(.top, 24)
+            .padding(.horizontal, 24)
+        }
+        .ignoresSafeArea()
+    }
+}
+
+// MARK: - Case file header / panel (shared by settings & credits)
+
+private struct CaseFileHeader: View {
+    let title: String
+    let onBack: () -> Void
+
+    var body: some View {
+        HStack {
+            Button(action: onBack) {
+                Label("BACK", systemImage: "chevron.left")
+                    .font(.system(size: 14, weight: .heavy, design: .rounded))
+                    .foregroundColor(WoodTheme.title)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule()
+                            .fill(WoodTheme.frame)
+                            .overlay(Capsule().strokeBorder(WoodTheme.frameDark, lineWidth: 3))
+                    )
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Text(title)
+                .font(.system(size: 22, weight: .black, design: .monospaced))
+                .foregroundColor(Color(red: 0.74, green: 0.14, blue: 0.12))
+
+            Spacer()
+
+            // Balances the back button so the title stays centered.
+            Color.clear.frame(width: 80, height: 1)
+        }
+    }
+}
+
+private struct CaseFilePanel<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content
+            .background(Color(red: 0.96, green: 0.93, blue: 0.84))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(red: 0.78, green: 0.64, blue: 0.42), lineWidth: 3))
     }
 }
 
@@ -861,7 +1165,6 @@ private struct ObjectiveBarView: View {
 
 private struct StartView: View {
     @Binding var startMode: StartMode
-    @Binding var selectedTheme: String
     @Binding var numRooms: Int
     @Binding var hardMode: Bool
     @Binding var numAgents: Int
@@ -873,36 +1176,19 @@ private struct StartView: View {
     let onLoadRun: (String) -> Void
     let onBack: () -> Void
 
+    private let inkColor = Color(red: 0.25, green: 0.22, blue: 0.18)
+    private let panelColor = Color(red: 0.96, green: 0.93, blue: 0.84)
+
     var body: some View {
         ZStack {
-            SkyBackground()
+            CaseDeskBackground()
                 .ignoresSafeArea()
 
             ScrollView {
                 VStack(spacing: 20) {
-                    HStack {
-                        Button(action: onBack) {
-                            Label("BACK", systemImage: "chevron.left")
-                                .font(.system(size: 14, weight: .heavy, design: .rounded))
-                                .foregroundColor(WoodTheme.title)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .background(
-                                    Capsule()
-                                        .fill(WoodTheme.frame)
-                                        .overlay(Capsule().strokeBorder(WoodTheme.frameDark, lineWidth: 3))
-                                )
-                        }
-                        .buttonStyle(.plain)
-
-                        Spacer()
-                    }
-                    .padding(.horizontal, 24)
-                    .padding(.top, 16)
-
-                    WoodSignTitle(title: "ESCAPE ROOM", fontSize: 26, aspectRatio: 4.0)
-                        .frame(maxWidth: 420)
+                    CaseFileHeader(title: "NEW CASE", onBack: onBack)
                         .padding(.horizontal, 24)
+                        .padding(.top, 16)
 
                     // Mode toggle
                     HStack(spacing: 0) {
@@ -918,104 +1204,63 @@ private struct StartView: View {
                     .padding(.horizontal, 24)
 
                     if startMode == .generate {
-                        // Theme list
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("CHOOSE THEME")
-                                .font(.system(size: 12, weight: .heavy, design: .rounded))
-                                .foregroundColor(WoodTheme.frameDark)
-
-                            VStack(spacing: 0) {
-                                ForEach(themes, id: \.self) { theme in
-                                    Button {
-                                        selectedTheme = theme
-                                    } label: {
-                                        HStack {
-                                            Text(theme)
-                                                .font(.system(size: 15, weight: .medium, design: .rounded))
-                                                .foregroundColor(selectedTheme == theme ? WoodTheme.parchment : WoodTheme.frameDark)
-                                            Spacer()
-                                            if selectedTheme == theme {
-                                                Image(systemName: "checkmark")
-                                                    .font(.system(size: 12, weight: .bold))
-                                                    .foregroundColor(WoodTheme.parchment)
-                                            }
-                                        }
-                                        .padding(.horizontal, 14)
-                                        .padding(.vertical, 12)
-                                        .background(selectedTheme == theme ? WoodTheme.frame : WoodTheme.parchment)
-                                    }
-                                    .buttonStyle(.plain)
-
-                                    if theme != themes.last {
-                                        Divider().background(WoodTheme.frame.opacity(0.4))
-                                    }
-                                }
-                            }
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(WoodTheme.frame, lineWidth: 3))
-                        }
-                        .padding(.horizontal, 24)
-
                         // World settings
                         VStack(alignment: .leading, spacing: 8) {
                             Text("WORLD SETTINGS")
                                 .font(.system(size: 12, weight: .heavy, design: .rounded))
-                                .foregroundColor(WoodTheme.frameDark)
+                                .foregroundColor(inkColor)
 
-                            VStack(spacing: 0) {
-                                Stepper(value: $numRooms, in: 1...10) {
-                                    HStack {
-                                        Text("Rooms")
-                                            .font(.system(size: 15, weight: .medium, design: .rounded))
-                                            .foregroundColor(WoodTheme.frameDark)
-                                        Spacer()
-                                        Text("\(numRooms)")
-                                            .font(.system(size: 15, weight: .heavy, design: .rounded))
-                                            .foregroundColor(WoodTheme.frameDark)
+                            CaseFilePanel {
+                                VStack(spacing: 0) {
+                                    Stepper(value: $numRooms, in: 1...10) {
+                                        HStack {
+                                            Text("Rooms")
+                                                .font(.system(size: 15, weight: .medium, design: .rounded))
+                                                .foregroundColor(inkColor)
+                                            Spacer()
+                                            Text("\(numRooms)")
+                                                .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                                .foregroundColor(inkColor)
+                                        }
                                     }
-                                }
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 12)
-                                .background(WoodTheme.parchment)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 12)
 
-                                Divider().background(WoodTheme.frame.opacity(0.4))
+                                    Divider().background(Color(red: 0.55, green: 0.50, blue: 0.42).opacity(0.3))
 
-                                HStack {
-                                    Text("Hard Mode")
-                                        .font(.system(size: 15, weight: .medium, design: .rounded))
-                                        .foregroundColor(WoodTheme.frameDark)
-                                    Spacer()
-                                    Toggle("", isOn: $hardMode)
-                                        .labelsHidden()
-                                        .tint(WoodTheme.frame)
-                                }
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 12)
-                                .background(WoodTheme.parchment)
-
-                                Divider().background(WoodTheme.frame.opacity(0.4))
-
-                                Stepper(value: $numAgents, in: 1...4) {
                                     HStack {
-                                        Text("Agents")
+                                        Text("Hard Mode")
                                             .font(.system(size: 15, weight: .medium, design: .rounded))
-                                            .foregroundColor(WoodTheme.frameDark)
+                                            .foregroundColor(inkColor)
                                         Spacer()
-                                        Text("\(numAgents)")
-                                            .font(.system(size: 15, weight: .heavy, design: .rounded))
-                                            .foregroundColor(WoodTheme.frameDark)
+                                        Toggle("", isOn: $hardMode)
+                                            .labelsHidden()
+                                            .tint(WoodTheme.frame)
                                     }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 12)
+
+                                    Divider().background(Color(red: 0.55, green: 0.50, blue: 0.42).opacity(0.3))
+
+                                    Stepper(value: $numAgents, in: 1...4) {
+                                        HStack {
+                                            Text("Agents")
+                                                .font(.system(size: 15, weight: .medium, design: .rounded))
+                                                .foregroundColor(inkColor)
+                                            Spacer()
+                                            Text("\(numAgents)")
+                                                .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                                .foregroundColor(inkColor)
+                                        }
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 12)
                                 }
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 12)
-                                .background(WoodTheme.parchment)
                             }
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(WoodTheme.frame, lineWidth: 3))
                         }
                         .padding(.horizontal, 24)
 
-                        WoodButton(label: "GENERATE WORLD", systemImage: "wand.and.stars", iconColor: WoodTheme.leaf, action: onGenerate)
+                        WoodButton(label: "OPEN CASE FILE", systemImage: "folder.fill", iconColor: WoodTheme.leaf, action: onGenerate)
                             .padding(.horizontal, 24)
 
                     } else {
@@ -1023,40 +1268,39 @@ private struct StartView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("WORLD SETTINGS")
                                 .font(.system(size: 12, weight: .heavy, design: .rounded))
-                                .foregroundColor(WoodTheme.frameDark)
+                                .foregroundColor(inkColor)
 
-                            Stepper(value: $numAgents, in: 1...4) {
-                                HStack {
-                                    Text("Agents")
-                                        .font(.system(size: 15, weight: .medium, design: .rounded))
-                                        .foregroundColor(WoodTheme.frameDark)
-                                    Spacer()
-                                    Text("\(numAgents)")
-                                        .font(.system(size: 15, weight: .heavy, design: .rounded))
-                                        .foregroundColor(WoodTheme.frameDark)
+                            CaseFilePanel {
+                                Stepper(value: $numAgents, in: 1...4) {
+                                    HStack {
+                                        Text("Agents")
+                                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                                            .foregroundColor(inkColor)
+                                        Spacer()
+                                        Text("\(numAgents)")
+                                            .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                            .foregroundColor(inkColor)
+                                    }
                                 }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 12)
-                            .background(WoodTheme.parchment)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(WoodTheme.frame, lineWidth: 3))
                         }
                         .padding(.horizontal, 24)
 
                         // Saved worlds grid
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
-                                Text("SAVED WORLDS")
+                                Text("SAVED CASE FILES")
                                     .font(.system(size: 12, weight: .heavy, design: .rounded))
-                                    .foregroundColor(WoodTheme.frameDark)
+                                    .foregroundColor(inkColor)
 
                                 Spacer()
 
                                 Button(action: onRefreshRuns) {
                                     Image(systemName: "arrow.clockwise")
                                         .font(.system(size: 12, weight: .heavy))
-                                        .foregroundColor(WoodTheme.frameDark)
+                                        .foregroundColor(inkColor)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -1076,7 +1320,7 @@ private struct StartView: View {
                             } else if savedRuns.isEmpty {
                                 Text("No saved worlds found.")
                                     .font(.system(size: 12, design: .monospaced))
-                                    .foregroundColor(WoodTheme.frameDark.opacity(0.6))
+                                    .foregroundColor(inkColor.opacity(0.6))
                                     .padding(.vertical, 12)
                             } else {
                                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
@@ -1197,7 +1441,7 @@ private struct PartyStatusView: View {
                     if party.inventory.isEmpty {
                         Text("No items")
                             .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(WoodTheme.frameDark.opacity(0.6))
+                            .foregroundColor(Color(red: 0.25, green: 0.22, blue: 0.18).opacity(0.6))
                     } else {
                         Label("\(party.inventory.count) item(s)", systemImage: "bag")
                             .font(.system(size: 12, design: .monospaced))
@@ -1209,7 +1453,7 @@ private struct PartyStatusView: View {
                     if i == 0 {
                         Text("Tick \(party.tick)")
                             .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(WoodTheme.frameDark.opacity(0.6))
+                            .foregroundColor(Color(red: 0.25, green: 0.22, blue: 0.18).opacity(0.6))
                     }
                 }
             }

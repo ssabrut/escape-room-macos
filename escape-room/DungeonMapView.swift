@@ -174,6 +174,27 @@ private struct RoomCanvasView: View {
 
     // MARK: Objects — all objects placed at tileX/tileY
 
+    /// Wall thickness in tiles, matching `drawWalls`: the top wall is 2
+    /// tiles thick, the other three sides are 1 tile thick.
+    private static let wallTop: Int = 2
+    private static let wallSide: Int = 1
+
+    /// Clamps a tile coordinate so it falls on the floor, not inside the
+    /// surrounding stone wall border drawn by `drawWalls`.
+    private func clampToFloor(tileX: Int, tileY: Int) -> (Int, Int) {
+        let tilesW = room.widthTiles  ?? Int(roomTileCount)
+        let tilesH = room.heightTiles ?? Int(roomTileCount)
+
+        let minX = Self.wallSide
+        let maxX = max(tilesW - 1 - Self.wallSide, minX)
+        let minY = Self.wallTop
+        let maxY = max(tilesH - 1 - Self.wallSide, minY)
+
+        let clampedX = min(max(tileX, minX), maxX)
+        let clampedY = min(max(tileY, minY), maxY)
+        return (clampedX, clampedY)
+    }
+
     private func drawObjects(ctx: GraphicsContext, scaleX: CGFloat, scaleY: CGFloat, p: CGFloat) {
         for obj in room.objects {
             // Doors are already drawn as thick colored lines in drawDoors.
@@ -181,13 +202,13 @@ private struct RoomCanvasView: View {
                 continue
             }
             guard let tx = obj.tileX, let ty = obj.tileY else { continue }
-            let cx = CGFloat(tx) * scaleX + scaleX / 2
-            let cy = CGFloat(ty) * scaleY + scaleY / 2
+            let (clampedX, clampedY) = clampToFloor(tileX: tx, tileY: ty)
+            let cx = CGFloat(clampedX) * scaleX + scaleX / 2
+            let cy = CGFloat(clampedY) * scaleY + scaleY / 2
 
             // Try cached sprite image first
             if let cgImage = SpriteCache.shared.image(for: obj.id) {
-                let size = p * 3
-                let rect = CGRect(x: cx - size / 2, y: cy - size / 2, width: size, height: size)
+                let rect = CGRect(x: cx - scaleX / 2, y: cy - scaleY / 2, width: scaleX, height: scaleY)
                 ctx.draw(Image(cgImage, scale: 1, label: Text(obj.id)),
                          in: rect)
                 continue
@@ -399,14 +420,16 @@ private struct RoomCanvasView: View {
     // MARK: Player
 
     private func drawPlayer(ctx: GraphicsContext, size: CGSize, p: CGFloat, agentIndex: Int, color: Color) {
-        let offsetX = CGFloat(agentIndex) * (p * 1.8)
-        let px = size.width / 2 - p * 0.75 + offsetX
+        // Scale the whole figure down so it occupies roughly one tile.
+        let s = p * (1 / 1.5)
+        let offsetX = CGFloat(agentIndex) * p
+        let px = size.width / 2 - s * 0.75 + offsetX
         let py = size.height * 0.62
-        ctx.fill(Path(CGRect(x: px + p * 0.1, y: py + p * 2.2, width: p * 1.1, height: p * 0.25)),
+        ctx.fill(Path(CGRect(x: px + s * 0.1, y: py + s * 2.2, width: s * 1.1, height: s * 0.25)),
                  with: .color(.black.opacity(0.35)))
-        ctx.fill(Path(CGRect(x: px, y: py + p * 0.8, width: p * 1.5, height: p * 1.4)),
+        ctx.fill(Path(CGRect(x: px, y: py + s * 0.8, width: s * 1.5, height: s * 1.4)),
                  with: .color(color))
-        ctx.fill(Path(CGRect(x: px + p * 0.2, y: py, width: p * 1.1, height: p * 0.8)),
+        ctx.fill(Path(CGRect(x: px + s * 0.2, y: py, width: s * 1.1, height: s * 0.8)),
                  with: .color(Color(red: 0.88, green: 0.72, blue: 0.58)))
     }
 }
@@ -452,7 +475,7 @@ private struct LegendItem: View {
             }
             Text(label)
                 .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(WoodTheme.frameDark.opacity(0.75))
+                .foregroundColor(Color(red: 0.25, green: 0.22, blue: 0.18).opacity(0.75))
         }
     }
 }
