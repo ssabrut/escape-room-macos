@@ -59,6 +59,24 @@ final class EscapeRoomViewModel: ObservableObject {
         return decoder
     }()
 
+    /// Clears the active case so the UI falls back to the main menu.
+    func returnToMenu() {
+        world = nil
+        isLoading = false
+        errorMessage = nil
+        progressMessage = nil
+        startedAt = nil
+        spriteETA = nil
+        solverTicks = []
+        solverResult = nil
+        narrationOpening = nil
+        narrationEnding = nil
+        storyboard = nil
+        hasStartedSolving = false
+        pendingWorldDict = nil
+        pendingStoryboardDict = nil
+    }
+
     func generate(theme: String = "Haunted House", hardMode: Bool = true, numRooms: Int = 3, numAgents: Int = 1) async {
         isLoading = true
         errorMessage = nil
@@ -346,6 +364,10 @@ struct ContentView: View {
                         storyboard: vm.storyboard,
                         onBegin: {
                             Task { await vm.beginSolving(numAgents: numAgents) }
+                        },
+                        onExit: {
+                            vm.returnToMenu()
+                            screen = .mainMenu
                         }
                     )
                         .overlay(alignment: .top) {
@@ -600,6 +622,7 @@ private struct GameView: View {
     var hasStartedSolving: Bool = true
     var storyboard: Storyboard? = nil
     var onBegin: () -> Void = {}
+    var onExit: () -> Void = {}
 
     @State private var showResult = false
     @State private var showBegin = true
@@ -652,6 +675,16 @@ private struct GameView: View {
                         }
                     }
                 }
+
+                VStack {
+                    HStack {
+                        BackToMenuButton(action: onExit)
+                            .padding(.leading, 12)
+                            .padding(.top, 12)
+                        Spacer()
+                    }
+                    Spacer()
+                }
             }
         }
         .onChange(of: result?.won) { _, won in
@@ -659,6 +692,40 @@ private struct GameView: View {
             withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) {
                 showResult = true
             }
+        }
+    }
+}
+
+// MARK: - Back to main menu button (shown over the dungeon map)
+
+private struct BackToMenuButton: View {
+    let action: () -> Void
+
+    @State private var showConfirm = false
+
+    var body: some View {
+        Button {
+            showConfirm = true
+        } label: {
+            Image(systemName: "house.fill")
+                .font(.system(size: 14, weight: .heavy))
+                .foregroundColor(WoodTheme.title)
+                .frame(width: 36, height: 36)
+                .background(
+                    Circle()
+                        .fill(WoodTheme.frame)
+                        .overlay(Circle().strokeBorder(WoodTheme.frameDark, lineWidth: 3))
+                )
+        }
+        .buttonStyle(.plain)
+        .shadow(color: .black.opacity(0.35), radius: 6, x: 0, y: 4)
+        .confirmationDialog(
+            "Leave this case and return to the main menu?",
+            isPresented: $showConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Back to Main Menu", role: .destructive, action: action)
+            Button("Cancel", role: .cancel) {}
         }
     }
 }
